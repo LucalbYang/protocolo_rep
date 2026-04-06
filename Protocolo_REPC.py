@@ -657,7 +657,6 @@ class EvoRepAuthApp(QWidget):
             QMessageBox.critical(self, "Erro de Conexão", message)
         self.connect_button.setEnabled(True)
 
-
 def main():
     app = QApplication(sys.argv)
     window = EvoRepAuthApp()
@@ -667,4 +666,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
