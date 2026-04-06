@@ -343,7 +343,7 @@ class EvoRepAuthApp(QWidget):
         QApplication.processEvents()
 
     def _setup_ui(self):
-        self.setWindowTitle("Protocolo EVO REP-C (Pressione F7 para exibir Log)")
+        self.setWindowTitle("Protocolo EVO REP-C")
 
         # Utilizamos QStackedWidget no lugar de QTabWidget para ocultar as abas
         self.stacked_widget = QStackedWidget(self)
@@ -360,32 +360,32 @@ class EvoRepAuthApp(QWidget):
         conn_layout = QGridLayout()
         conn_layout.setContentsMargins(0, 0, 0, 0) # Remove margens extras
 
-        conn_layout.addWidget(QLabel("IP:"), 0, 0)
+        # --- LINHA INVISÍVEL NO TOPO ---
+        top_spacer = QLabel("")
+        conn_layout.addWidget(top_spacer, 0, 0, 1, 2)
+
+        conn_layout.addWidget(QLabel("IP:"), 1, 0)
         self.ip_input = QLineEdit("127.0.0.1")
         self.ip_input.returnPressed.connect(lambda: self.port_input.setFocus())
-        conn_layout.addWidget(self.ip_input, 0, 1)
+        conn_layout.addWidget(self.ip_input, 1, 1)
 
-        conn_layout.addWidget(QLabel("Porta:"), 1, 0)
+        conn_layout.addWidget(QLabel("Porta:"), 2, 0)
         self.port_input = QLineEdit("5010")
         self.port_input.returnPressed.connect(lambda: self.user_input.setFocus())
-        conn_layout.addWidget(self.port_input, 1, 1)
+        conn_layout.addWidget(self.port_input, 2, 1)
 
-        conn_layout.addWidget(QLabel("Usuário:"), 2, 0)
+        conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
         self.user_input = QLineEdit("teste fabrica")
         self.user_input.returnPressed.connect(lambda: self.password_input.setFocus())
-        conn_layout.addWidget(self.user_input, 2, 1)
+        conn_layout.addWidget(self.user_input, 3, 1)
 
-        conn_layout.addWidget(QLabel("Senha:"), 3, 0)
+        conn_layout.addWidget(QLabel("Senha:"), 4, 0)
         self.password_input = QLineEdit("111111")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setMaxLength(6)
         self.password_input.textChanged.connect(self.validate_password_input)
         self.password_input.returnPressed.connect(self.on_password_enter_pressed)
-        conn_layout.addWidget(self.password_input, 3, 1)
-
-        self.password_error_label = QLabel("")
-        self.password_error_label.setStyleSheet("color: red; font-size: 10px;")
-        conn_layout.addWidget(self.password_error_label, 4, 1, 1, 1, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        conn_layout.addWidget(self.password_input, 4, 1)
 
         self.connect_button = QPushButton("Conectar")
         self.connect_button.clicked.connect(self.on_connect_clicked)
@@ -482,21 +482,12 @@ class EvoRepAuthApp(QWidget):
         
         if not self.connected:
             if not password:
-                self.password_error_label.setText("")
                 self.connect_button.setEnabled(False)
                 return
 
-            if not password.isdigit():
-                self.password_error_label.setText("A senha deve ter apenas números")
-            elif len(password) < 6:
-                self.password_error_label.setText("A senha deve possuir 6 números")
-            else:
-                self.password_error_label.setText("")
-
             is_valid = len(password) == 6 and password.isdigit()
             self.connect_button.setEnabled(is_valid)
-        else:
-            self.password_error_label.setText("")
+
 
     def set_inputs_enabled(self, enabled: bool):
         self.ip_input.setEnabled(enabled)
