@@ -406,7 +406,7 @@ class EvoRepAuthApp(QWidget):
 
         # --- ÁREA INFERIOR: CONTROLE ANTIGO DE COMANDO ---
         mid_layout = QGridLayout()
-        mid_layout.addWidget(QLabel("Enviar string (comando):"), 0, 0, 1, 2)
+        mid_layout.addWidget(QLabel("Enviar comando manualmente:"), 0, 0, 1, 2)
         self.command_input = QLineEdit("01+RH+00")
         mid_layout.addWidget(self.command_input, 1, 0, 1, 2)
 
@@ -519,21 +519,37 @@ class EvoRepAuthApp(QWidget):
         else:
             self.sent_output.setPlainText(self.last_sent_text)
             self.received_output.setPlainText(self.last_received_text)
+            
+        # Rola a barra vertical automaticamente para o final em ambas as caixas
+        self.sent_output.verticalScrollBar().setValue(self.sent_output.verticalScrollBar().maximum())
+        self.received_output.verticalScrollBar().setValue(self.received_output.verticalScrollBar().maximum())
 
     def append_sent(self, text: str):
-        self.last_sent_text = text
+        if self.last_sent_text:
+            self.last_sent_text += "\n" + text
+        else:
+            self.last_sent_text = text
         self.update_sent_received_output()
 
     def append_sent_bytes(self, hex_text: str):
-        self.last_sent_bytes = hex_text
+        if self.last_sent_bytes:
+            self.last_sent_bytes += "\n" + hex_text
+        else:
+            self.last_sent_bytes = hex_text
         self.update_sent_received_output()
     
     def append_received(self, text: str):
-        self.last_received_text = text
+        if self.last_received_text:
+            self.last_received_text += "\n" + text
+        else:
+            self.last_received_text = text
         self.update_sent_received_output()
 
     def append_received_bytes(self, hex_text: str):
-        self.last_received_bytes = hex_text
+        if self.last_received_bytes:
+            self.last_received_bytes += "\n" + hex_text
+        else:
+            self.last_received_bytes = hex_text
         self.update_sent_received_output()
 
     def on_toggle_display_mode(self):
