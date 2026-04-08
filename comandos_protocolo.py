@@ -96,15 +96,29 @@ registrar_comando(CommandDefinition(
 
 registrar_comando(CommandDefinition(
     code="RH",
-    description="Relógio de Hardware: Leitura ou ajuste de data e hora do equipamento.",
-    template="01+{code}+00+{data_hora}",
+    description="Receber Data/Hora: Obtém o relógio atual do equipamento.",
+    template="01+{code}+00",
+    params=[]
+))
+
+registrar_comando(CommandDefinition(
+    code="EH",
+    description="Enviar Data/Hora: Ajusta o relógio interno do equipamento.",
+    template="01+{code}+00+{data} {hora}]00/00/00]00/00/00",
     params=[
         CommandParam(
-            name="data_hora", 
+            name="data", 
             type=str, 
             default="", 
-            required=False, 
-            description="Ex: 07/04/2026 09:00:00 (Deixe vazio apenas para ler)"
+            required=True, 
+            description="DD/MM/AA"
+        ),
+        CommandParam(
+            name="hora", 
+            type=str, 
+            default="", 
+            required=True, 
+            description="HH:MM:SS"
         )
     ]
 ))

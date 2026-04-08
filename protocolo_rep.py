@@ -505,8 +505,8 @@ class EvoRepAuthApp(QWidget):
             
             # Gerar formulário dinâmico baseado nos params
             for param in cmd_def.params:
-                label_text = f"{param.name} {'(*)' if param.required else '(opcional)'}:"
-                
+                label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
+
                 if param.choices:
                     # Gerar ComboBox para parâmetros com opções fixas
                     input_field = QComboBox()
@@ -517,10 +517,18 @@ class EvoRepAuthApp(QWidget):
                     # Gerar LineEdit normal
                     input_field = QLineEdit(str(param.default))
                     input_field.setPlaceholderText(param.description)
-                    self.dynamic_layout.addRow(label_text, input_field)
-                
-                self.param_inputs[param.name] = input_field
 
+                    # Aplicar máscaras para data e hora se identificadas pelo nome/descrição
+                    if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
+                        input_field.setInputMask("99/99/99;_")
+                        input_field.setText(time.strftime("%d/%m/%y"))
+                    elif param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower():
+                        input_field.setInputMask("99:99:99;_")
+                        input_field.setText(time.strftime("%H:%M:%S"))
+
+                    self.dynamic_layout.addRow(label_text, input_field)
+
+                self.param_inputs[param.name] = input_field
     def on_send_command_clicked(self):
         if not self.persistent_sock:
             self.append_log("Erro: Socket não disponível. Conecte primeiro.")
