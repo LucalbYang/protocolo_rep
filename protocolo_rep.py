@@ -4,11 +4,13 @@ import socket
 import base64
 import traceback
 import time
+from comandos_protocolo import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
-                             QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox)
+                             QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
+                             QComboBox, QFormLayout)
 
 # Prefer pycryptodome, fallback para cryptography se necessário.
 try:
@@ -145,17 +147,14 @@ class EvoRepCrypto:
         data = plaintext.encode('utf-8')
         iv = os.urandom(16)
         
-        pad_len = 16 - (len(data) % 16)
-        if pad_len != 16:
-            padded_data = data + (b'\x00' * pad_len)
-        else:
-            padded_data = data
-        
         if CRYPTO_BACKEND == "pycryptodome":
+            padded_data = pad(data, 16)
             cipher = AES.new(key, AES.MODE_CBC, iv)
             ciphertext = cipher.encrypt(padded_data)
             return iv + ciphertext
         else:
+            padder = sym_padding.PKCS7(128).padder()
+            padded_data = padder.update(data) + padder.finalize()
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
             encryptor = cipher.encryptor()
             ciphertext = encryptor.update(padded_data) + encryptor.finalize()
@@ -175,7 +174,7 @@ class EvoRepCrypto:
             
             try:
                 decrypted = unpad(decrypted_padded, AES.block_size)
-            except ValueError:
+            except (ValueError, Exception):
                 decrypted = decrypted_padded.rstrip(b'\x00')
                 
             return decrypted.decode('utf-8', errors='replace')
@@ -187,7 +186,7 @@ class EvoRepCrypto:
             try:
                 unpadder = sym_padding.PKCS7(128).unpadder()
                 decrypted = unpadder.update(decrypted_padded) + unpadder.finalize()
-            except ValueError:
+            except (ValueError, Exception):
                 decrypted = decrypted_padded.rstrip(b'\x00')
                 
             return decrypted.decode('utf-8', errors='replace')
@@ -358,42 +357,34 @@ class EvoRepAuthApp(QWidget):
         
         self.setCursor(Qt.CursorShape.ArrowCursor)
         QApplication.processEvents()
+        
+        # Aciona manualmente o evento pela primeira vez para exibir o painel custom/manual
+        self.on_command_selected(0)
 
     def _setup_ui(self):
         self.setWindowTitle("Protocolo EVO REP-A/C")
-
-        # Utilizamos QStackedWidget no lugar de QTabWidget para ocultar as abas
         self.stacked_widget = QStackedWidget(self)
 
-        # Aba principal (controle / envio de comandos)
         main_tab = QWidget()
-        main_layout = QVBoxLayout() # Trocado para QVBox para organizar top e bottom
+        main_layout = QVBoxLayout()
 
-        # --- ÁREA SUPERIOR: DIVISÃO 1/4 (Login) vs 3/4 (Comandos) ---
+        # --- ÁREA SUPERIOR: DIVISÃO (Login) vs (Vazio/Expansão) ---
         top_layout = QHBoxLayout()
-
-        # Widget de login
         conn_widget = QWidget()
         conn_layout = QGridLayout()
-        conn_layout.setContentsMargins(0, 0, 0, 0) # Remove margens extras
+        conn_layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- LINHA INVISÍVEL NO TOPO ---
-        top_spacer = QLabel("")
-        conn_layout.addWidget(top_spacer, 0, 0, 1, 2)
-
+        conn_layout.addWidget(QLabel(""), 0, 0, 1, 2) # Spacer topo
         conn_layout.addWidget(QLabel("IP:"), 1, 0)
         self.ip_input = QLineEdit("192.168.60.71")
-        self.ip_input.returnPressed.connect(lambda: self.port_input.setFocus())
         conn_layout.addWidget(self.ip_input, 1, 1)
 
         conn_layout.addWidget(QLabel("Porta:"), 2, 0)
         self.port_input = QLineEdit("3000")
-        self.port_input.returnPressed.connect(lambda: self.user_input.setFocus())
         conn_layout.addWidget(self.port_input, 2, 1)
 
         conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
         self.user_input = QLineEdit("teste fabrica")
-        self.user_input.returnPressed.connect(lambda: self.password_input.setFocus())
         conn_layout.addWidget(self.user_input, 3, 1)
 
         conn_layout.addWidget(QLabel("Senha:"), 4, 0)
@@ -407,31 +398,52 @@ class EvoRepAuthApp(QWidget):
         self.connect_button = QPushButton("Conectar")
         self.connect_button.clicked.connect(self.on_connect_clicked)
         conn_layout.addWidget(self.connect_button, 5, 0, 1, 2)
-
-        # Empurra os inputs para o topo caso a caixa de comandos ao lado cresça
         conn_layout.setRowStretch(6, 1) 
         conn_widget.setLayout(conn_layout)
 
-        # Box de Comandos
-        cmds_group = QGroupBox("Comandos")
+        # Em vez de um grupo vazio para comandos ao lado da conexão, 
+        # movemos o construtor dinâmico para ficar centralizado e limpo.
+        cmds_group = QGroupBox("Construção de Comandos")
+        cmds_group_layout = QVBoxLayout(cmds_group)
 
-        # Adiciona no topo com stretch 1 (1/4) e 3 (3/4)
-        top_layout.addWidget(conn_widget, 1)
-        top_layout.addWidget(cmds_group, 3)
+        # ComboBox para seleção de comandos
+        combo_layout = QHBoxLayout()
+        combo_layout.addWidget(QLabel("Selecionar:"))
+        self.command_combo = QComboBox()
+        self.command_combo.addItem("✏️ Modo Manual / Custom", None) # Data = None indica manual
+        
+        # Popula a ComboBox baseada no catálogo
+        for code, cmd_def in COMMANDS_REGISTRY.items():
+            resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
+            self.command_combo.addItem(f"{code} - {resumo}", code)
+            
+        self.command_combo.currentIndexChanged.connect(self.on_command_selected)
+        combo_layout.addWidget(self.command_combo)
+        cmds_group_layout.addLayout(combo_layout)
 
-        main_layout.addLayout(top_layout)
+        # Descrição do comando
+        self.cmd_description_label = QLabel("")
+        self.cmd_description_label.setWordWrap(True)
+        self.cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
+        cmds_group_layout.addWidget(self.cmd_description_label)
 
-        # --- ÁREA INFERIOR: CONTROLE ANTIGO DE COMANDO ---
-        mid_layout = QGridLayout()
-        mid_layout.addWidget(QLabel("Enviar comando manualmente:"), 0, 0, 1, 2)
-        self.command_input = QLineEdit("01+RH+00")
-        mid_layout.addWidget(self.command_input, 1, 0, 1, 2)
+        # Painel onde os inputs serão gerados dinamicamente
+        self.dynamic_params_widget = QWidget()
+        self.dynamic_layout = QFormLayout(self.dynamic_params_widget)
+        cmds_group_layout.addWidget(self.dynamic_params_widget)
+        
+        self.param_inputs = {}  # Guarda referências dos QLineEdit gerados
 
         self.send_button = QPushButton("Enviar comando")
         self.send_button.clicked.connect(self.on_send_command_clicked)
         self.send_button.setEnabled(False)
-        mid_layout.addWidget(self.send_button, 2, 0, 1, 2)
+        cmds_group_layout.addWidget(self.send_button)
 
+        top_layout.addWidget(conn_widget, 1)
+        top_layout.addWidget(cmds_group, 3)
+        main_layout.addLayout(top_layout)
+
+        # --- ÁREA INFERIOR: LOG DE COMUNICAÇÃO ---
         sent_layout = QVBoxLayout()
         sent_layout.addWidget(QLabel("String enviada:"))
         self.sent_output = QTextEdit()
@@ -447,8 +459,7 @@ class EvoRepAuthApp(QWidget):
         boxes_layout = QHBoxLayout()
         boxes_layout.addLayout(sent_layout)
         boxes_layout.addLayout(received_layout)
-
-        mid_layout.addLayout(boxes_layout, 3, 0, 1, 2)
+        main_layout.addLayout(boxes_layout)
 
         control_layout = QHBoxLayout()
         self.clear_button = QPushButton("Limpar")
@@ -459,12 +470,10 @@ class EvoRepAuthApp(QWidget):
         self.toggle_mode_button.clicked.connect(self.on_toggle_display_mode)
         control_layout.addWidget(self.toggle_mode_button)
 
-        mid_layout.addLayout(control_layout, 4, 0, 1, 2)
-        main_layout.addLayout(mid_layout)
-
+        main_layout.addLayout(control_layout)
         main_tab.setLayout(main_layout)
 
-        # Aba de log (agora oculta no QStackedWidget)
+        # Aba de log (oculta no QStackedWidget)
         log_tab = QWidget()
         log_layout = QVBoxLayout()
         self.log_output = QTextEdit()
@@ -478,8 +487,79 @@ class EvoRepAuthApp(QWidget):
         root_layout = QVBoxLayout()
         root_layout.addWidget(self.stacked_widget)
         self.setLayout(root_layout)
+        self.resize(800, 600)
 
-        self.resize(720, 540)
+    # -------------------------------------------------------------
+    # NOVOS MÉTODOS DINÂMICOS
+    # -------------------------------------------------------------
+    def on_command_selected(self, index):
+        """Limpa o layout atual e gera os campos de input baseados no comando selecionado."""
+        # Limpar layout anterior
+        while self.dynamic_layout.rowCount() > 0:
+            self.dynamic_layout.removeRow(0)
+        self.param_inputs.clear()
+
+        # Recuperar o código do comando selecionado
+        cmd_code = self.command_combo.currentData()
+
+        if cmd_code is None:
+            # Modo manual ativo
+            self.cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la sem validação.")
+            self.manual_input = QLineEdit("01+RH+00")
+            self.dynamic_layout.addRow("Comando Bruto:", self.manual_input)
+            self.param_inputs["_manual"] = self.manual_input
+        else:
+            # Comando cadastrado ativo
+            cmd_def = COMMANDS_REGISTRY[cmd_code]
+            self.cmd_description_label.setText(cmd_def.description)
+            
+            # Gerar formulário dinâmico baseado nos params
+            for param in cmd_def.params:
+                input_field = QLineEdit(str(param.default))
+                input_field.setPlaceholderText(param.description)
+                
+                label_text = f"{param.name} {'(*)' if param.required else '(opcional)'}:"
+                self.dynamic_layout.addRow(label_text, input_field)
+                self.param_inputs[param.name] = input_field
+
+    def on_send_command_clicked(self):
+        if not self.persistent_sock:
+            self.append_log("Erro: Socket não disponível. Conecte primeiro.")
+            return
+
+        cmd_code = self.command_combo.currentData()
+        
+        # 1. Recuperar string final baseado no modo (Manual vs Catalogado)
+        if cmd_code is None:
+            command_str = self.param_inputs["_manual"].text().strip()
+            if not command_str:
+                self.append_log("Preencha o comando manual antes de enviar.")
+                return
+        else:
+            cmd_def = COMMANDS_REGISTRY[cmd_code]
+            kwargs = {}
+            # Extrair os textos digitados
+            for param_name, input_field in self.param_inputs.items():
+                kwargs[param_name] = input_field.text().strip()
+                
+            try:
+                # O comando delega a construção de si mesmo (Padrão Builder)
+                command_str = cmd_def.build(**kwargs)
+            except ValueError as e:
+                # Bloqueia o envio e avisa o usuário se a validação falhar
+                QMessageBox.warning(self, "Erro de Validação", str(e))
+                self.append_log(f"Comando abortado: {e}")
+                return
+
+        # 2. Desabilitar botão e instanciar rotina (Comportamento original preservado)
+        self.send_button.setEnabled(False)
+        self.command_worker = CommandWorker(self.persistent_sock, command_str, self.session_key)
+        self.command_worker.sent_signal.connect(self.append_sent)
+        self.command_worker.sent_bytes_signal.connect(self.append_sent_bytes)
+        self.command_worker.received_signal.connect(self.append_received)
+        self.command_worker.received_bytes_signal.connect(self.append_received_bytes)
+        self.command_worker.finished_signal.connect(self.on_send_command_finished)
+        self.command_worker.start()
 
     # Novo evento para captar a tecla F7 e alternar as telas
     def keyPressEvent(self, event):
@@ -578,27 +658,6 @@ class EvoRepAuthApp(QWidget):
         self.dot_count = (self.dot_count + 1) % 4
         dots = "." * self.dot_count
         self.connect_button.setText(f"Conectando{dots}")
-
-    def on_send_command_clicked(self):
-        command = self.command_input.text().strip()
-
-        if not self.persistent_sock:
-            self.append_log("Erro: Socket não disponível. Conecte primeiro.")
-            return
-
-        if not command:
-            self.append_log("Preencha o comando antes de enviar.")
-            return
-
-        self.send_button.setEnabled(False)
-        
-        self.command_worker = CommandWorker(self.persistent_sock, command, self.session_key)
-        self.command_worker.sent_signal.connect(self.append_sent)
-        self.command_worker.sent_bytes_signal.connect(self.append_sent_bytes)
-        self.command_worker.received_signal.connect(self.append_received)
-        self.command_worker.received_bytes_signal.connect(self.append_received_bytes)
-        self.command_worker.finished_signal.connect(self.on_send_command_finished)
-        self.command_worker.start()
 
     def on_send_command_finished(self, success: bool, message: str):
         self.append_log(message)
