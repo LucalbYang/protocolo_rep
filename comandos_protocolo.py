@@ -9,6 +9,7 @@ class CommandParam:
     default: Any = ""
     description: str = ""
     required: bool = True
+    choices: List[Dict[str, str]] = field(default_factory=list) # Lista de {'label': ..., 'value': ...}
 
 @dataclass
 class CommandDefinition:
@@ -31,11 +32,26 @@ class CommandDefinition:
             if param.required and (val is None or val == ""):
                 raise ValueError(f"O parâmetro obrigatório '{param.name}' não pode estar vazio.")
             
+            # Se houver choices, validar se o valor é um dos valores permitidos
+            if param.choices:
+                valid_values = [c['value'] for c in param.choices]
+                if val not in valid_values:
+                    # Tenta encontrar o valor pelo label caso o usuário tenha passado o texto do combo
+                    val_by_label = next((c['value'] for c in param.choices if c['label'] == val), None)
+                    if val_by_label:
+                        val = val_by_label
+                    else:
+                        raise ValueError(f"Valor '{val}' inválido para o parâmetro '{param.name}'.")
+
             safe_kwargs[param.name] = str(val)
 
         try:
             # Constrói a string injetando o código e os parâmetros dinâmicos
-            return self.template.format(code=self.code, **safe_kwargs)
+            res = self.template.format(code=self.code, **safe_kwargs)
+            # Se o comando termina em + porque o último parâmetro opcional está vazio, removemos o +
+            if res.endswith('+') and not self.template.endswith('+'):
+                res = res.rstrip('+')
+            return res
         except KeyError as e:
             raise ValueError(f"Erro na formatação do comando: Placeholder {e} não fornecido.")
 
@@ -50,6 +66,33 @@ def registrar_comando(cmd: CommandDefinition):
 # ==========================================
 # CATÁLOGO DE COMANDOS (Adicione novos aqui)
 # ==========================================
+
+registrar_comando(CommandDefinition(
+    code="RQ",
+    description="Quantidades e Status: Retorna informações sobre o estado e contadores do equipamento.",
+    template="01+{code}+00+{sigla}",
+    params=[
+        CommandParam(
+            name="sigla",
+            type=str,
+            description="Selecione o tipo de informação desejada",
+            required=True,
+            choices=[
+                {"label": "U - Retorna a quantidade de usuários cadastrados.", "value": "U"},
+                {"label": "D - Retorna a quantidade de digitais cadastradas.", "value": "D"},
+                {"label": "TD - Retorna a quantidade total de digitais que o módulo suporta.", "value": "TD"},
+                {"label": "R - Retorna a quantidade de registros na memória.", "value": "R"},
+                {"label": "C - Retorna a quantidade de cartões cadastrados.", "value": "C"},
+                {"label": "TP - Informa se o equipamento está bloqueado.", "value": "TP"},
+                {"label": "MRPE - Informa se há erro ao comunicar com a MRP.", "value": "MRPE"},
+                {"label": "SEMP - Indica se não há empregador cadastrado.", "value": "SEMP"},
+                {"label": "PP - Informa se o sensor de pouco papel está ativado.", "value": "PP"},
+                {"label": "SP - Informa se o equipamento está sem papel.", "value": "SP"},
+                {"label": "QP - Quantidade de tickets que podem ser impressos / tamanho atual / tamanho total da bobina.", "value": "QP"},
+            ]
+        )
+    ]
+))
 
 registrar_comando(CommandDefinition(
     code="RH",

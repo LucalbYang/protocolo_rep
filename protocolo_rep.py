@@ -147,14 +147,15 @@ class EvoRepCrypto:
         data = plaintext.encode('utf-8')
         iv = os.urandom(16)
         
+        # Zero Padding: completa o bloco de 16 bytes com zeros
+        pad_len = (16 - (len(data) % 16)) % 16
+        padded_data = data + (b'\x00' * pad_len)
+        
         if CRYPTO_BACKEND == "pycryptodome":
-            padded_data = pad(data, 16)
             cipher = AES.new(key, AES.MODE_CBC, iv)
             ciphertext = cipher.encrypt(padded_data)
             return iv + ciphertext
         else:
-            padder = sym_padding.PKCS7(128).padder()
-            padded_data = padder.update(data) + padder.finalize()
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
             encryptor = cipher.encryptor()
             ciphertext = encryptor.update(padded_data) + encryptor.finalize()
@@ -170,26 +171,15 @@ class EvoRepCrypto:
         
         if CRYPTO_BACKEND == "pycryptodome":
             cipher = AES.new(key, AES.MODE_CBC, iv)
-            decrypted_padded = cipher.decrypt(actual_ciphertext)
-            
-            try:
-                decrypted = unpad(decrypted_padded, AES.block_size)
-            except (ValueError, Exception):
-                decrypted = decrypted_padded.rstrip(b'\x00')
-                
-            return decrypted.decode('utf-8', errors='replace')
+            decrypted = cipher.decrypt(actual_ciphertext)
+            # Remove zeros do final (Zero Padding)
+            return decrypted.rstrip(b'\x00').decode('utf-8', errors='replace')
         else:
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
             decryptor = cipher.decryptor()
-            decrypted_padded = decryptor.update(actual_ciphertext) + decryptor.finalize()
-            
-            try:
-                unpadder = sym_padding.PKCS7(128).unpadder()
-                decrypted = unpadder.update(decrypted_padded) + unpadder.finalize()
-            except (ValueError, Exception):
-                decrypted = decrypted_padded.rstrip(b'\x00')
-                
-            return decrypted.decode('utf-8', errors='replace')
+            decrypted = decryptor.update(actual_ciphertext) + decryptor.finalize()
+            # Remove zeros do final (Zero Padding)
+            return decrypted.rstrip(b'\x00').decode('utf-8', errors='replace')
 
     @staticmethod
     def encrypt_credentials_with_rsa(pubkey_data, credentials: str) -> bytes:
@@ -515,11 +505,20 @@ class EvoRepAuthApp(QWidget):
             
             # Gerar formulário dinâmico baseado nos params
             for param in cmd_def.params:
-                input_field = QLineEdit(str(param.default))
-                input_field.setPlaceholderText(param.description)
-                
                 label_text = f"{param.name} {'(*)' if param.required else '(opcional)'}:"
-                self.dynamic_layout.addRow(label_text, input_field)
+                
+                if param.choices:
+                    # Gerar ComboBox para parâmetros com opções fixas
+                    input_field = QComboBox()
+                    for choice in param.choices:
+                        input_field.addItem(choice['label'], choice['value'])
+                    self.dynamic_layout.addRow(label_text, input_field)
+                else:
+                    # Gerar LineEdit normal
+                    input_field = QLineEdit(str(param.default))
+                    input_field.setPlaceholderText(param.description)
+                    self.dynamic_layout.addRow(label_text, input_field)
+                
                 self.param_inputs[param.name] = input_field
 
     def on_send_command_clicked(self):
@@ -538,9 +537,12 @@ class EvoRepAuthApp(QWidget):
         else:
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             kwargs = {}
-            # Extrair os textos digitados
+            # Extrair os valores digitados ou selecionados
             for param_name, input_field in self.param_inputs.items():
-                kwargs[param_name] = input_field.text().strip()
+                if isinstance(input_field, QComboBox):
+                    kwargs[param_name] = input_field.currentData()
+                else:
+                    kwargs[param_name] = input_field.text().strip()
                 
             try:
                 # O comando delega a construção de si mesmo (Padrão Builder)
