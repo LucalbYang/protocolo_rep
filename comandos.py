@@ -122,3 +122,69 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
+registrar_comando(CommandDefinition(
+    code="EU",
+    description="Enviar Usuário: Cadastra um novo usuário no equipamento.",
+    template="01+{code}+00+1+I[{CPF}[{Nome}[{Bio}[{QMat}[{Matrícula}}}{Matrícula2}[{Senha}]",
+    params=[
+        CommandParam(
+            name="CPF", 
+            type=str, 
+            default="", 
+            required=True, 
+            description="CPF"
+            
+        ),
+        CommandParam(
+            name="Nome", 
+            type=str, 
+            default="", 
+            required=True, 
+            description="Nome completo"
+
+        ),
+        CommandParam(
+            name="Bio",
+            type=str, 
+            default="", 
+            required=True, 
+            description="Biometria",
+            choices=[
+                {"label": "0 - Não verifica biometria.", "value": "0"},
+                {"label": "1 - verifica biometria.", "value": "1"},
+            ]
+        ),
+        CommandParam(
+            name="QMat",
+            type=str, 
+            default="", 
+            required=True, 
+            description="Quantidade de matrículas",
+            choices=[
+                {"label": "1 - Uma matrícula ", "value": "1"},
+                {"label": "2 - Duas matrículas", "value": "2"},
+            ]
+        ),
+        CommandParam(
+            name="Matrícula",
+            type=str, 
+            default="", 
+            required=True, 
+            description="Matrícula 1"
+        ),
+        CommandParam(
+            name="Matrícula2", 
+            type=str, 
+            default="", 
+            required=False, 
+            description="Matrícula 2"
+        ),
+        CommandParam(
+            name="Senha",
+            type=str, 
+            default="", 
+            required=False, 
+            description="Senha"
+        )   
+    ]
+))

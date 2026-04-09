@@ -505,6 +505,10 @@ class EvoRepAuthApp(QWidget):
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             self.cmd_description_label.setText(cmd_def.description)
             
+            # Variáveis para agrupar Data e Hora na mesma linha
+            pending_data_field = None
+            pending_data_label = None
+            
             # Gerar formulário dinâmico baseado nos params
             for param in cmd_def.params:
                 label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
@@ -514,7 +518,6 @@ class EvoRepAuthApp(QWidget):
                     input_field = QComboBox()
                     for choice in param.choices:
                         input_field.addItem(choice['label'], choice['value'])
-                    self.dynamic_layout.addRow(label_text, input_field)
                 else:
                     # Gerar LineEdit normal
                     input_field = QLineEdit(str(param.default))
@@ -528,9 +531,42 @@ class EvoRepAuthApp(QWidget):
                         input_field.setInputMask("99:99:99;_")
                         input_field.setText(time.strftime("%H:%M:%S"))
 
-                    self.dynamic_layout.addRow(label_text, input_field)
+                # LÓGICA DE AGRUPAMENTO DE DATA E HORA
+                if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
+                    # Guarda a data em vez de adicionar na tela imediatamente
+                    pending_data_field = input_field
+                    pending_data_label = label_text
+                    self.param_inputs[param.name] = input_field
+                    continue # Pula para o próximo parâmetro
+                
+                elif (param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower()) and pending_data_field is not None:
+                    # Cria um container horizontal para colocar Data e Hora juntos
+                    hbox = QHBoxLayout()
+                    hbox.setContentsMargins(0, 0, 0, 0)
+                    
+                    # Adiciona o campo de Data que estava aguardando
+                    hbox.addWidget(pending_data_field)
+                    
+                    # Adiciona o Label e o campo da Hora ao lado
+                    label_hora = QLabel(label_text)
+                    hbox.addWidget(label_hora)
+                    hbox.addWidget(input_field)
+                    
+                    # Adiciona tudo no formulário em uma única linha
+                    self.dynamic_layout.addRow(pending_data_label, hbox)
+                    
+                    self.param_inputs[param.name] = input_field
+                    pending_data_field = None # Limpa a variável
+                    continue
 
+                # Adiciona os outros campos normalmente
+                self.dynamic_layout.addRow(label_text, input_field)
                 self.param_inputs[param.name] = input_field
+
+            # Caso haja um campo de Data sozinho (sem Hora depois), adiciona ele normalmente
+            if pending_data_field is not None:
+                self.dynamic_layout.addRow(pending_data_label, pending_data_field)
+                
     def on_send_command_clicked(self):
         if not self.persistent_sock:
             self.append_log("Erro: Socket não disponível. Conecte primeiro.")
