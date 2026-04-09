@@ -4,7 +4,7 @@ import socket
 import base64
 import traceback
 import time
-from comandos_protocolo import COMMANDS_REGISTRY
+from comandos import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
@@ -477,7 +477,9 @@ class EvoRepAuthApp(QWidget):
         root_layout = QVBoxLayout()
         root_layout.addWidget(self.stacked_widget)
         self.setLayout(root_layout)
-        self.resize(800, 600)
+        
+        self.setMinimumSize(1280, 720)
+        self.resize(1280, 720)
 
     # -------------------------------------------------------------
     # NOVOS MÉTODOS DINÂMICOS

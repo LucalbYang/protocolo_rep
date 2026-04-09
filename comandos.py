@@ -70,10 +70,10 @@ def registrar_comando(cmd: CommandDefinition):
 registrar_comando(CommandDefinition(
     code="RQ",
     description="Quantidades e Status: Retorna informações sobre o estado e contadores do equipamento.",
-    template="01+{code}+00+{sigla}",
+    template="01+{code}+00+{Parâmetro}",
     params=[
         CommandParam(
-            name="sigla",
+            name="Parâmetro",
             type=str,
             description="Selecione o tipo de informação desejada",
             required=True,
@@ -82,7 +82,6 @@ registrar_comando(CommandDefinition(
                 {"label": "D - Retorna a quantidade de digitais cadastradas.", "value": "D"},
                 {"label": "TD - Retorna a quantidade total de digitais que o módulo suporta.", "value": "TD"},
                 {"label": "R - Retorna a quantidade de registros na memória.", "value": "R"},
-                {"label": "C - Retorna a quantidade de cartões cadastrados.", "value": "C"},
                 {"label": "TP - Informa se o equipamento está bloqueado.", "value": "TP"},
                 {"label": "MRPE - Informa se há erro ao comunicar com a MRP.", "value": "MRPE"},
                 {"label": "SEMP - Indica se não há empregador cadastrado.", "value": "SEMP"},
@@ -104,17 +103,17 @@ registrar_comando(CommandDefinition(
 registrar_comando(CommandDefinition(
     code="EH",
     description="Enviar Data/Hora: Ajusta o relógio interno do equipamento.",
-    template="01+{code}+00+{data} {hora}]00/00/00]00/00/00",
+    template="01+{code}+00+{Data} {Hora}]00/00/00]00/00/00",
     params=[
         CommandParam(
-            name="data", 
+            name="Data", 
             type=str, 
             default="", 
             required=True, 
             description="DD/MM/AA"
         ),
         CommandParam(
-            name="hora", 
+            name="Hora", 
             type=str, 
             default="", 
             required=True, 
@@ -123,20 +122,3 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
-# registrar_comando(CommandDefinition(
-#     code="RC",
-#     description="Receber Configurações: Obtém os parâmetros operacionais atuais do REP.",
-#     template="01+{code}+00",
-#     params=[] # Comando simples sem parâmetros adicionais
-# ))
-
-# registrar_comando(CommandDefinition(
-#     code="EU",
-#     description="Enviar Usuário: Cadastra ou atualiza as credenciais de um funcionário no REP.",
-#     template="01+{code}+00+{pis}+{nome}+{senha}",
-#     params=[
-#         CommandParam(name="pis", type=str, required=True, description="PIS (11 dígitos, sem pontuação)"),
-#         CommandParam(name="nome", type=str, required=True, description="Nome do funcionário"),
-#         CommandParam(name="senha", type=str, required=False, default="", description="Senha numérica (opicional)")
-#     ]
-# ))
