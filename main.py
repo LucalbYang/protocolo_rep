@@ -10,7 +10,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
                              QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
-                             QComboBox, QFormLayout)
+                             QComboBox, QFormLayout, QScrollArea, QCheckBox, QFrame)
 
 # Prefer pycryptodome, fallback para cryptography se necessário.
 try:
@@ -417,10 +417,14 @@ class EvoRepAuthApp(QWidget):
         self.cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
         cmds_group_layout.addWidget(self.cmd_description_label)
 
-        # Painel onde os inputs serão gerados dinamicamente
+        # Painel onde os inputs serão gerados dinamicamente (dentro de um ScrollArea)
+        self.params_scroll = QScrollArea()
+        self.params_scroll.setWidgetResizable(True)
+        self.params_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.dynamic_params_widget = QWidget()
         self.dynamic_layout = QFormLayout(self.dynamic_params_widget)
-        cmds_group_layout.addWidget(self.dynamic_params_widget)
+        self.params_scroll.setWidget(self.dynamic_params_widget)
+        cmds_group_layout.addWidget(self.params_scroll)
         
         self.param_inputs = {}  # Guarda referências dos QLineEdit gerados
 
@@ -514,10 +518,25 @@ class EvoRepAuthApp(QWidget):
                 label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
 
                 if param.choices:
-                    # Gerar ComboBox para parâmetros com opções fixas
-                    input_field = QComboBox()
-                    for choice in param.choices:
-                        input_field.addItem(choice['label'], choice['value'])
+                    if cmd_code == "RC":
+                        # Checklist para o comando RC
+                        checkboxes = []
+                        for choice in param.choices:
+                            cb = QCheckBox(choice['label'])
+                            cb.setProperty("value", choice['value'])
+                            self.dynamic_layout.addRow("", cb)
+                            checkboxes.append(cb)
+                        
+                        self.param_inputs[param.name] = checkboxes
+                        continue # Pula para o próximo parâmetro do loop principal
+                    else:
+                        # Gerar ComboBox para outros parâmetros com opções fixas
+                        input_field = QComboBox()
+                        for choice in param.choices:
+                            input_field.addItem(choice['label'], choice['value'])
+                        self.dynamic_layout.addRow(label_text, input_field)
+                        self.param_inputs[param.name] = input_field
+                        continue # Pula para o próximo parâmetro
                 else:
                     # Gerar LineEdit normal
                     input_field = QLineEdit(str(param.default))
@@ -585,16 +604,20 @@ class EvoRepAuthApp(QWidget):
             kwargs = {}
             # Extrair os valores digitados ou selecionados
             for param_name, input_field in self.param_inputs.items():
-                if isinstance(input_field, QComboBox):
+                if isinstance(input_field, list):
+                    # Lógica para checklist (RC)
+                    selected_values = [cb.property("value") for cb in input_field if cb.isChecked()]
+                    val = "]".join(selected_values)
+                elif isinstance(input_field, QComboBox):
                     val = input_field.currentData()
                 else:
                     val = input_field.text().strip()
                 
                 # Customização solicitada pelo usuário para o comando EU
                 if cmd_code == "EU":
-                    if param_name == "Matrícula2":
+                    if param_name == "Matrícula2" and val:
                         val = "}" + val
-                    elif param_name == "Senha":
+                    elif param_name == "Senha" and val:
                         val = "[" + val
                 
                 kwargs[param_name] = val
