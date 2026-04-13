@@ -125,7 +125,7 @@ registrar_comando(CommandDefinition(
 registrar_comando(CommandDefinition(
     code="EU",
     description="Enviar Usuário: Cadastra um novo usuário no equipamento.",
-    template="01+{code}+00+1+I[{CPF}[{Nome}[{Bio}[{QMat}[{Matrícula}}}{Matrícula2}[{Senha}]",
+    template="01+{code}+00+1+I[{CPF}[{Nome}[{Bio}[{QMat}[{Matrícula}}}{Matrícula2}[{Senha}",
     params=[
         CommandParam(
             name="CPF", 

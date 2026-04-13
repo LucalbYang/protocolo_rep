@@ -478,8 +478,8 @@ class EvoRepAuthApp(QWidget):
         root_layout.addWidget(self.stacked_widget)
         self.setLayout(root_layout)
         
-        self.setMinimumSize(1280, 720)
-        self.resize(1280, 720)
+        self.setMinimumSize(850, 600)
+        self.resize(850, 600)
 
     # -------------------------------------------------------------
     # NOVOS MÉTODOS DINÂMICOS
@@ -586,9 +586,18 @@ class EvoRepAuthApp(QWidget):
             # Extrair os valores digitados ou selecionados
             for param_name, input_field in self.param_inputs.items():
                 if isinstance(input_field, QComboBox):
-                    kwargs[param_name] = input_field.currentData()
+                    val = input_field.currentData()
                 else:
-                    kwargs[param_name] = input_field.text().strip()
+                    val = input_field.text().strip()
+                
+                # Customização solicitada pelo usuário para o comando EU
+                if cmd_code == "EU":
+                    if param_name == "Matrícula2":
+                        val = "}" + val
+                    elif param_name == "Senha":
+                        val = "[" + val
+                
+                kwargs[param_name] = val
                 
             try:
                 # O comando delega a construção de si mesmo (Padrão Builder)
