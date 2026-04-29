@@ -6,7 +6,7 @@ import traceback
 import time
 from comandos import COMMANDS_REGISTRY
 
-from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt
+from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
                              QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
@@ -29,6 +29,18 @@ except ModuleNotFoundError:
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives import padding as sym_padding
     CRYPTO_BACKEND = "cryptography"
+
+# 🔹 REQUISITO 1: Classe Customizada para bloquear Scroll e Setas nos ComboBox
+class NoScrollComboBox(QComboBox):
+    """QComboBox que ignora scroll do mouse e teclas de seta para evitar mudanças acidentais."""
+    def wheelEvent(self, event):
+        event.ignore()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            event.ignore()
+        else:
+            super().keyPressEvent(event)
 
 
 class EvoRepProtocol:
@@ -286,11 +298,94 @@ class NetworkWorker(QThread):
         self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"")
 
 
+class ClientNetworkWorker(QThread):
+    log_signal = pyqtSignal(str)
+    # emitimos True/False, mensagem, o socket e a session_key se sucesso
+    finished_signal = pyqtSignal(bool, str, object, bytes)
+
+    def __init__(self, ip: str, port: int, user: str, password: str, parent=None):
+        super().__init__(parent)
+        self.ip = ip
+        self.port = port
+        self.user = user
+        self.password = password
+        self.server_sock = None
+
+    def stop(self):
+        if self.server_sock:
+            try:
+                self.server_sock.close()
+            except:
+                pass
+
+    def run(self):
+        try:
+            self.log_signal.emit(f"Iniciando servidor em {self.ip}:{self.port}...")
+            self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_sock.bind((self.ip, self.port))
+            self.server_sock.listen(1)
+            self.server_sock.settimeout(None) # Aguarda indefinidamente a menos que seja parado
+
+            self.log_signal.emit("Aguardando conexão do equipamento...")
+            try:
+                sock, addr = self.server_sock.accept()
+            except Exception as e:
+                if self.server_sock:
+                    self.finished_signal.emit(False, f"Servidor parado: {e}", None, b"")
+                return
+
+            self.log_signal.emit(f"Conexão recebida de {addr}. Iniciando handshake...")
+            
+            ra_payload = "01+RA+00"
+            ra_packet = EvoRepProtocol.pack(ra_payload)
+            sock.sendall(ra_packet)
+
+            resp_data = EvoRepProtocol.receive_full(sock)
+            payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+            self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
+
+            rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
+            n, e, mod_b64 = rsa_pubkey_data
+            
+            public_key_b32 = EvoRepCrypto.format_modulus_to_b32(mod_b64)
+            self.log_signal.emit(f"Chave Pública do equipamento: {public_key_b32}")
+
+            session_key = EvoRepCrypto.generate_aes_key()
+            session_key_b64 = base64.b64encode(session_key).decode("utf-8")
+            credential = f"1]{self.user}]{self.password}]{session_key_b64}"
+
+            encrypted = EvoRepCrypto.encrypt_credentials_with_rsa((n, e), credential)
+            encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
+
+            ea_payload = f"01+EA+00+{encrypted_b64}"
+            ea_packet = EvoRepProtocol.pack(ea_payload)
+            sock.sendall(ea_packet)
+
+            resp_ea = EvoRepProtocol.receive_full(sock)
+            payload_ea = EvoRepProtocol.unpack(resp_ea).decode('utf-8', errors='ignore')
+            self.log_signal.emit(f"Payload EA recebido: {payload_ea}")
+
+            if payload_ea.startswith("01+EA+000"):
+                self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key)
+            elif payload_ea.startswith("01+EA+009"):
+                self.finished_signal.emit(False, "Usuário ou senha inválidos.", None, b"")
+                sock.close()
+            else:
+                self.finished_signal.emit(False, f"Falha na autenticação (EA): {payload_ea}", None, b"")
+                sock.close()
+
+        except Exception as e:
+            self.log_signal.emit(f"Erro no modo cliente: {e}")
+            self.finished_signal.emit(False, str(e), None, b"")
+        finally:
+            if self.server_sock:
+                self.server_sock.close()
+
+
 class CommandWorker(QThread):
     sent_signal = pyqtSignal(str)
     sent_bytes_signal = pyqtSignal(str)
-    received_signal = pyqtSignal(str)
-    received_bytes_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
 
     def __init__(self, sock: socket.socket, command: str, session_key: bytes, parent=None):
@@ -301,9 +396,7 @@ class CommandWorker(QThread):
 
     def run(self):
         try:
-            # Usar o socket persistente já conectado
-            self.sock.settimeout(5)
-
+            # Apenas envia o comando. A resposta será capturada pelo ListenerWorker.
             encrypted_command = EvoRepCrypto.encrypt_aes(self.session_key, self.command)
             packet = EvoRepProtocol.pack(encrypted_command)
             
@@ -311,38 +404,135 @@ class CommandWorker(QThread):
             self.sent_bytes_signal.emit(packet.hex(' '))
             
             self.sock.sendall(packet)
-
-            resp_data = EvoRepProtocol.receive_full(self.sock)
-            resp_payload_encrypted = EvoRepProtocol.unpack(resp_data)
-            
-            resp_payload = EvoRepCrypto.decrypt_aes(self.session_key, resp_payload_encrypted)
-            
-            self.received_signal.emit(resp_payload)
-            self.received_bytes_signal.emit(resp_data.hex(' '))
-
-            self.finished_signal.emit(True, 'Comando enviado com sucesso.')
+            self.finished_signal.emit(True, 'Comando enviado. Aguardando resposta em tempo real...')
         except Exception as e:
             self.finished_signal.emit(False, f'Erro ao enviar comando: {e}')
+
+
+class ListenerWorker(QThread):
+    received_signal = pyqtSignal(str)
+    received_bytes_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, sock: socket.socket, session_key: bytes, parent=None):
+        super().__init__(parent)
+        self.sock = sock
+        self.session_key = session_key
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def run(self):
+        while self.running:
+            try:
+                # O receive_full aguarda dados. O timeout de 2s permite que o loop
+                # verifique se self.running ainda é True periodicamente.
+                data = EvoRepProtocol.receive_full(self.sock, timeout=2.0)
+                if not data:
+                    continue
+                
+                # Desempacota e descriptografa o que chegou
+                payload_encrypted = EvoRepProtocol.unpack(data)
+                payload = EvoRepCrypto.decrypt_aes(self.session_key, payload_encrypted)
+                
+                self.received_signal.emit(payload)
+                self.received_bytes_signal.emit(data.hex(' '))
+            except socket.timeout:
+                # Timeout normal do loop, apenas continua
+                continue
+            except Exception as e:
+                if self.running:
+                    self.error_signal.emit(str(e))
+                break
+
+
+def get_local_ip():
+    """
+    Obtém o IP local priorizando interfaces do tipo Ethernet (cabo) via PowerShell.
+    """
+    import subprocess
+    try:
+        # Comando PowerShell para buscar IPs de interfaces Ethernet que estejam ativas (Up)
+        ps_cmd = (
+            "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.Name -like '*Ethernet*' -or $_.InterfaceDescription -like '*Ethernet*' -or $_.Name -like '*Local Area*') } "
+            "| Get-NetIPAddress -AddressFamily IPv4 | Select-Object -ExpandProperty IPAddress"
+        )
+        output = subprocess.check_output(["powershell", "-Command", ps_cmd], shell=True).decode('utf-8').strip()
+        
+        if output:
+            # Se retornar múltiplos IPs (ex: máquinas virtuais), pegamos o primeiro
+            ips = output.split('\r\n')
+            if ips:
+                return ips[0].strip()
+
+        # Fallback 1: Se o comando específico falhou, tenta pegar qualquer IP IPv4 que não seja WiFi
+        ps_cmd_fallback = (
+            "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike '*Wi-Fi*' -and $_.IPAddress -notlike '127.*' } "
+            "| Select-Object -ExpandProperty IPAddress"
+        )
+        output_fallback = subprocess.check_output(["powershell", "-Command", ps_cmd_fallback], shell=True).decode('utf-8').strip()
+        if output_fallback:
+            return output_fallback.split('\r\n')[0].strip()
+
+        # Fallback 2: Método clássico do socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        # Fallback de emergência
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except:
+            return "127.0.0.1"
 
 
 class EvoRepAuthApp(QWidget):
     def __init__(self):
         super().__init__()
-        self._setup_ui()
-        self.worker = None
-        self.persistent_sock = None
-        self.session_key = None
-        self.connected = False
+        # Estado independente por aba
+        self.tab_data = {
+            "main_": {
+                "persistent_sock": None,
+                "session_key": None,
+                "connected": False,
+                "worker": None,
+                "listener_worker": None,
+                "last_sent_text": "",
+                "last_sent_bytes": "",
+                "last_received_text": "",
+                "last_received_bytes": "",
+            },
+            "client_": {
+                "persistent_sock": None,
+                "session_key": None,
+                "connected": False,
+                "worker": None,
+                "listener_worker": None,
+                "last_sent_text": "",
+                "last_sent_bytes": "",
+                "last_received_text": "",
+                "last_received_bytes": "",
+            }
+        }
+        
         self.show_bytes = False
-        self.last_sent_text = ""
-        self.last_sent_bytes = ""
-        self.last_received_text = ""
-        self.last_received_bytes = ""
         self.settings = QSettings("EvoRep", "EvoRepAuthApp")
+        
+        # Variáveis para histórico do modo manual
+        self.manual_history = []
+        self.history_index = -1
+        self.last_manual_command = "01+RH+00"
         
         self.connect_timer = QTimer()
         self.connect_timer.timeout.connect(self.animate_connecting_button)
         self.dot_count = 0
+        
+        self.param_inputs = {}  # Guarda referências dos QLineEdit gerados
+        
+        self._setup_ui()
         self.load_config()
         
         self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -351,132 +541,29 @@ class EvoRepAuthApp(QWidget):
         # Aciona manualmente o evento pela primeira vez para exibir o painel custom/manual
         self.on_command_selected(0)
 
+    def closeEvent(self, event):
+        """Salva todas as configurações e a geometria da janela ao fechar."""
+        self.save_config()
+        # Salva posição e tamanho da janela
+        self.settings.setValue("geometry", self.saveGeometry())
+        # Salva a aba atual
+        self.settings.setValue("active_tab", self.stacked_widget.currentIndex())
+        super().closeEvent(event)
+
     def _setup_ui(self):
         self.setWindowTitle("Protocolo EVO REP-A/C")
         self.stacked_widget = QStackedWidget(self)
 
-        main_tab = QWidget()
-        main_layout = QVBoxLayout()
+        # Aba Principal (F1)
+        self.main_tab = self._create_rep_tab(is_client_mode=False)
+        # Aba de Log (F7)
+        self.log_tab = self._create_log_tab()
+        # Aba Modo Cliente (F2)
+        self.client_tab = self._create_rep_tab(is_client_mode=True)
 
-        # --- ÁREA SUPERIOR: DIVISÃO (Login) vs (Vazio/Expansão) ---
-        top_layout = QHBoxLayout()
-        conn_widget = QWidget()
-        conn_layout = QGridLayout()
-        conn_layout.setContentsMargins(0, 0, 0, 0)
-
-        conn_layout.addWidget(QLabel(""), 0, 0, 1, 2) # Spacer topo
-        conn_layout.addWidget(QLabel("IP:"), 1, 0)
-        self.ip_input = QLineEdit("192.168.60.71")
-        conn_layout.addWidget(self.ip_input, 1, 1)
-
-        conn_layout.addWidget(QLabel("Porta:"), 2, 0)
-        self.port_input = QLineEdit("3000")
-        conn_layout.addWidget(self.port_input, 2, 1)
-
-        conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
-        self.user_input = QLineEdit("teste fabrica")
-        conn_layout.addWidget(self.user_input, 3, 1)
-
-        conn_layout.addWidget(QLabel("Senha:"), 4, 0)
-        self.password_input = QLineEdit("111111")
-        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setMaxLength(6)
-        self.password_input.textChanged.connect(self.validate_password_input)
-        self.password_input.returnPressed.connect(self.on_password_enter_pressed)
-        conn_layout.addWidget(self.password_input, 4, 1)
-
-        self.connect_button = QPushButton("Conectar")
-        self.connect_button.clicked.connect(self.on_connect_clicked)
-        conn_layout.addWidget(self.connect_button, 5, 0, 1, 2)
-        conn_layout.setRowStretch(6, 1) 
-        conn_widget.setLayout(conn_layout)
-
-        # Em vez de um grupo vazio para comandos ao lado da conexão, 
-        # movemos o construtor dinâmico para ficar centralizado e limpo.
-        cmds_group = QGroupBox("Construção de Comandos")
-        cmds_group_layout = QVBoxLayout(cmds_group)
-
-        # ComboBox para seleção de comandos
-        combo_layout = QHBoxLayout()
-        combo_layout.addWidget(QLabel("Selecionar:"))
-        self.command_combo = QComboBox()
-        self.command_combo.addItem("✏️ Modo Manual / Custom", None) # Data = None indica manual
-        
-        # Popula a ComboBox baseada no catálogo
-        for code, cmd_def in COMMANDS_REGISTRY.items():
-            resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
-            self.command_combo.addItem(f"{code} - {resumo}", code)
-            
-        self.command_combo.currentIndexChanged.connect(self.on_command_selected)
-        combo_layout.addWidget(self.command_combo)
-        cmds_group_layout.addLayout(combo_layout)
-
-        # Descrição do comando
-        self.cmd_description_label = QLabel("")
-        self.cmd_description_label.setWordWrap(True)
-        self.cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
-        cmds_group_layout.addWidget(self.cmd_description_label)
-
-        # Painel onde os inputs serão gerados dinamicamente (dentro de um ScrollArea)
-        self.params_scroll = QScrollArea()
-        self.params_scroll.setWidgetResizable(True)
-        self.params_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.dynamic_params_widget = QWidget()
-        self.dynamic_layout = QFormLayout(self.dynamic_params_widget)
-        self.params_scroll.setWidget(self.dynamic_params_widget)
-        cmds_group_layout.addWidget(self.params_scroll)
-        
-        self.param_inputs = {}  # Guarda referências dos QLineEdit gerados
-
-        self.send_button = QPushButton("Enviar comando")
-        self.send_button.clicked.connect(self.on_send_command_clicked)
-        self.send_button.setEnabled(False)
-        cmds_group_layout.addWidget(self.send_button)
-
-        top_layout.addWidget(conn_widget, 1)
-        top_layout.addWidget(cmds_group, 3)
-        main_layout.addLayout(top_layout)
-
-        # --- ÁREA INFERIOR: LOG DE COMUNICAÇÃO ---
-        sent_layout = QVBoxLayout()
-        sent_layout.addWidget(QLabel("String enviada:"))
-        self.sent_output = QTextEdit()
-        self.sent_output.setReadOnly(True)
-        sent_layout.addWidget(self.sent_output)
-
-        received_layout = QVBoxLayout()
-        received_layout.addWidget(QLabel("String recebida:"))
-        self.received_output = QTextEdit()
-        self.received_output.setReadOnly(True)
-        received_layout.addWidget(self.received_output)
-
-        boxes_layout = QHBoxLayout()
-        boxes_layout.addLayout(sent_layout)
-        boxes_layout.addLayout(received_layout)
-        main_layout.addLayout(boxes_layout)
-
-        control_layout = QHBoxLayout()
-        self.clear_button = QPushButton("Limpar")
-        self.clear_button.clicked.connect(self.on_clear_clicked)
-        control_layout.addWidget(self.clear_button)
-
-        self.toggle_mode_button = QPushButton("Exibir em bytes")
-        self.toggle_mode_button.clicked.connect(self.on_toggle_display_mode)
-        control_layout.addWidget(self.toggle_mode_button)
-
-        main_layout.addLayout(control_layout)
-        main_tab.setLayout(main_layout)
-
-        # Aba de log (oculta no QStackedWidget)
-        log_tab = QWidget()
-        log_layout = QVBoxLayout()
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        log_layout.addWidget(self.log_output)
-        log_tab.setLayout(log_layout)
-
-        self.stacked_widget.addWidget(main_tab)
-        self.stacked_widget.addWidget(log_tab)
+        self.stacked_widget.addWidget(self.main_tab)   # Index 0
+        self.stacked_widget.addWidget(self.log_tab)    # Index 1
+        self.stacked_widget.addWidget(self.client_tab) # Index 2
 
         root_layout = QVBoxLayout()
         root_layout.addWidget(self.stacked_widget)
@@ -485,64 +572,222 @@ class EvoRepAuthApp(QWidget):
         self.setMinimumSize(850, 600)
         self.resize(850, 600)
 
-    # -------------------------------------------------------------
-    # NOVOS MÉTODOS DINÂMICOS
-    # -------------------------------------------------------------
+    def _create_rep_tab(self, is_client_mode=False):
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        # --- ÁREA SUPERIOR: DIVISÃO (Login) vs (Comandos) ---
+        top_layout = QHBoxLayout()
+        
+        # Painel de Conexão
+        conn_widget = QWidget()
+        conn_layout = QGridLayout()
+        conn_layout.setContentsMargins(0, 0, 0, 0)
+
+        conn_layout.addWidget(QLabel(""), 0, 0, 1, 2) # Spacer topo
+        conn_layout.addWidget(QLabel("IP:"), 1, 0)
+        
+        ip_val = get_local_ip() if is_client_mode else "192.168.60.71"
+        ip_input = QLineEdit(ip_val)
+        conn_layout.addWidget(ip_input, 1, 1)
+
+        conn_layout.addWidget(QLabel("Porta:"), 2, 0)
+        port_input = QLineEdit("3000")
+        conn_layout.addWidget(port_input, 2, 1)
+
+        conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
+        user_input = QLineEdit("teste fabrica")
+        conn_layout.addWidget(user_input, 3, 1)
+
+        conn_layout.addWidget(QLabel("Senha:"), 4, 0)
+        password_input = QLineEdit("111111")
+        password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        password_input.setMaxLength(6)
+        conn_layout.addWidget(password_input, 4, 1)
+
+        # 🔹 REQUISITO 2: Refatoração dos Botões da Aba F2 (Modo Cliente)
+        if is_client_mode:
+            self.client_btn_server_control = QPushButton("Iniciar Servidor")
+            self.client_btn_client_state = QPushButton("Aguardando Conexão")
+            self.client_btn_client_state.setEnabled(False)
+            
+            client_btns_layout = QHBoxLayout()
+            client_btns_layout.addWidget(self.client_btn_server_control)
+            client_btns_layout.addWidget(self.client_btn_client_state)
+            conn_layout.addLayout(client_btns_layout, 5, 0, 1, 2)
+            
+            self.client_btn_server_control.clicked.connect(self.on_connect_clicked)
+            self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
+            
+            # Alias para manter compatibilidade com lógica existente
+            self.client_connect_button = self.client_btn_server_control 
+        else:
+            self.main_connect_button = QPushButton("Conectar")
+            self.main_connect_button.clicked.connect(self.on_connect_clicked)
+            conn_layout.addWidget(self.main_connect_button, 5, 0, 1, 2)
+
+        conn_layout.setRowStretch(6, 1) 
+        conn_widget.setLayout(conn_layout)
+
+        # Painel de Comandos
+        cmds_group = QGroupBox("Construção de Comandos")
+        cmds_group_layout = QVBoxLayout(cmds_group)
+
+        combo_layout = QHBoxLayout()
+        combo_layout.addWidget(QLabel("Selecionar:"))
+        
+        # 🔹 REQUISITO 1: Uso da NoScrollComboBox
+        command_combo = NoScrollComboBox()
+        command_combo.addItem("Modo Manual / Custom", None)
+        for code, cmd_def in COMMANDS_REGISTRY.items():
+            resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
+            command_combo.addItem(f"{code} - {resumo}", code)
+        combo_layout.addWidget(command_combo)
+        cmds_group_layout.addLayout(combo_layout)
+
+        cmd_description_label = QLabel("")
+        cmd_description_label.setWordWrap(True)
+        cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
+        cmds_group_layout.addWidget(cmd_description_label)
+
+        params_scroll = QScrollArea()
+        params_scroll.setWidgetResizable(True)
+        params_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        dynamic_params_widget = QWidget()
+        dynamic_layout = QFormLayout(dynamic_params_widget)
+        params_scroll.setWidget(dynamic_params_widget)
+        cmds_group_layout.addWidget(params_scroll)
+        
+        send_button = QPushButton("Enviar comando")
+        send_button.setEnabled(False)
+        cmds_group_layout.addWidget(send_button)
+
+        top_layout.addWidget(conn_widget, 1)
+        top_layout.addWidget(cmds_group, 3)
+        layout.addLayout(top_layout)
+
+        # --- ÁREA INFERIOR: LOG DE COMUNICAÇÃO ---
+        sent_layout = QVBoxLayout()
+        sent_layout.addWidget(QLabel("String enviada:"))
+        sent_output = QTextEdit()
+        sent_output.setReadOnly(True)
+        sent_layout.addWidget(sent_output)
+
+        received_layout = QVBoxLayout()
+        received_layout.addWidget(QLabel("String recebida:"))
+        received_output = QTextEdit()
+        received_output.setReadOnly(True)
+        received_layout.addWidget(received_output)
+
+        boxes_layout = QHBoxLayout()
+        boxes_layout.addLayout(sent_layout)
+        boxes_layout.addLayout(received_layout)
+        layout.addLayout(boxes_layout)
+
+        control_layout = QHBoxLayout()
+        clear_button = QPushButton("Limpar")
+        control_layout.addWidget(clear_button)
+
+        toggle_mode_button = QPushButton("Exibir em bytes")
+        control_layout.addWidget(toggle_mode_button)
+        layout.addLayout(control_layout)
+
+        tab.setLayout(layout)
+
+        # Armazenar referências para uso posterior
+        prefix = "client_" if is_client_mode else "main_"
+        setattr(self, f"{prefix}ip_input", ip_input)
+        setattr(self, f"{prefix}port_input", port_input)
+        setattr(self, f"{prefix}user_input", user_input)
+        setattr(self, f"{prefix}password_input", password_input)
+        setattr(self, f"{prefix}command_combo", command_combo)
+        setattr(self, f"{prefix}dynamic_layout", dynamic_layout)
+        setattr(self, f"{prefix}send_button", send_button)
+        setattr(self, f"{prefix}sent_output", sent_output)
+        setattr(self, f"{prefix}received_output", received_output)
+        setattr(self, f"{prefix}clear_button", clear_button)
+        setattr(self, f"{prefix}toggle_mode_button", toggle_mode_button)
+        setattr(self, f"{prefix}cmd_description_label", cmd_description_label)
+
+        # Conectar sinais
+        password_input.textChanged.connect(self.validate_password_input)
+        password_input.returnPressed.connect(self.on_password_enter_pressed)
+        command_combo.currentIndexChanged.connect(self.on_command_selected)
+        send_button.clicked.connect(self.on_send_command_clicked)
+        clear_button.clicked.connect(self.on_clear_clicked)
+        toggle_mode_button.clicked.connect(self.on_toggle_display_mode)
+
+        return tab
+
+    def _create_log_tab(self):
+        log_tab = QWidget()
+        log_layout = QVBoxLayout()
+        self.log_output = QTextEdit()
+        self.log_output.setReadOnly(True)
+        log_layout.addWidget(self.log_output)
+        log_tab.setLayout(log_layout)
+        return log_tab
+
+    def _get_active_prefix(self):
+        idx = self.stacked_widget.currentIndex()
+        if idx == 2:
+            return "client_"
+        return "main_"
+
+    def _get_widget(self, name):
+        prefix = self._get_active_prefix()
+        return getattr(self, f"{prefix}{name}")
+
     def on_command_selected(self, index):
-        """Limpa o layout atual e gera os campos de input baseados no comando selecionado."""
-        # Limpar layout anterior
-        while self.dynamic_layout.rowCount() > 0:
-            self.dynamic_layout.removeRow(0)
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        command_combo = getattr(self, f"{prefix}command_combo")
+        cmd_description_label = getattr(self, f"{prefix}cmd_description_label")
+
+        while dynamic_layout.rowCount() > 0:
+            dynamic_layout.removeRow(0)
         self.param_inputs.clear()
 
-        # Recuperar o código do comando selecionado
-        cmd_code = self.command_combo.currentData()
+        cmd_code = command_combo.currentData()
 
         if cmd_code is None:
-            # Modo manual ativo
-            self.cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la sem validação.")
-            self.manual_input = QLineEdit("01+RH+00")
-            self.dynamic_layout.addRow("Comando Bruto:", self.manual_input)
+            cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la sem validação.")
+            self.manual_input = QLineEdit(self.last_manual_command)
+            self.manual_input.installEventFilter(self)
+            dynamic_layout.addRow("Comando Bruto:", self.manual_input)
             self.param_inputs["_manual"] = self.manual_input
         else:
-            # Comando cadastrado ativo
             cmd_def = COMMANDS_REGISTRY[cmd_code]
-            self.cmd_description_label.setText(cmd_def.description)
+            cmd_description_label.setText(cmd_def.description)
             
-            # Variáveis para agrupar Data e Hora na mesma linha
             pending_data_field = None
             pending_data_label = None
             
-            # Gerar formulário dinâmico baseado nos params
             for param in cmd_def.params:
                 label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
 
                 if param.choices:
-                    if cmd_code == "RC":
-                        # Checklist para o comando RC
+                    if cmd_code == "RC" and "config" in cmd_def.description.lower(): # Checklist apenas se for RC configuracao
                         checkboxes = []
                         for choice in param.choices:
                             cb = QCheckBox(choice['label'])
                             cb.setProperty("value", choice['value'])
-                            self.dynamic_layout.addRow("", cb)
+                            dynamic_layout.addRow("", cb)
                             checkboxes.append(cb)
-                        
                         self.param_inputs[param.name] = checkboxes
-                        continue # Pula para o próximo parâmetro do loop principal
+                        continue
                     else:
-                        # Gerar ComboBox para outros parâmetros com opções fixas
-                        input_field = QComboBox()
+                        # 🔹 REQUISITO 1: Uso da NoScrollComboBox em inputs dinâmicos
+                        input_field = NoScrollComboBox()
                         for choice in param.choices:
                             input_field.addItem(choice['label'], choice['value'])
-                        self.dynamic_layout.addRow(label_text, input_field)
+                        dynamic_layout.addRow(label_text, input_field)
                         self.param_inputs[param.name] = input_field
-                        continue # Pula para o próximo parâmetro
+                        continue
                 else:
-                    # Gerar LineEdit normal
                     input_field = QLineEdit(str(param.default))
                     input_field.setPlaceholderText(param.description)
 
-                    # Aplicar máscaras para data e hora se identificadas pelo nome/descrição
                     if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
                         input_field.setInputMask("99/99/99;_")
                         input_field.setText(time.strftime("%d/%m/%y"))
@@ -550,283 +795,410 @@ class EvoRepAuthApp(QWidget):
                         input_field.setInputMask("99:99:99;_")
                         input_field.setText(time.strftime("%H:%M:%S"))
 
-                # LÓGICA DE AGRUPAMENTO DE DATA E HORA
                 if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
-                    # Guarda a data em vez de adicionar na tela imediatamente
                     pending_data_field = input_field
                     pending_data_label = label_text
                     self.param_inputs[param.name] = input_field
-                    continue # Pula para o próximo parâmetro
-                
+                    continue
                 elif (param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower()) and pending_data_field is not None:
-                    # Cria um container horizontal para colocar Data e Hora juntos
                     hbox = QHBoxLayout()
                     hbox.setContentsMargins(0, 0, 0, 0)
-                    
-                    # Adiciona o campo de Data que estava aguardando
                     hbox.addWidget(pending_data_field)
-                    
-                    # Adiciona o Label e o campo da Hora ao lado
                     label_hora = QLabel(label_text)
                     hbox.addWidget(label_hora)
                     hbox.addWidget(input_field)
-                    
-                    # Adiciona tudo no formulário em uma única linha
-                    self.dynamic_layout.addRow(pending_data_label, hbox)
-                    
+                    dynamic_layout.addRow(pending_data_label, hbox)
                     self.param_inputs[param.name] = input_field
-                    pending_data_field = None # Limpa a variável
+                    pending_data_field = None
                     continue
 
-                # Adiciona os outros campos normalmente
-                self.dynamic_layout.addRow(label_text, input_field)
+                dynamic_layout.addRow(label_text, input_field)
                 self.param_inputs[param.name] = input_field
 
-            # Caso haja um campo de Data sozinho (sem Hora depois), adiciona ele normalmente
             if pending_data_field is not None:
-                self.dynamic_layout.addRow(pending_data_label, pending_data_field)
+                dynamic_layout.addRow(pending_data_label, pending_data_field)
+
+    def eventFilter(self, source, event):
+        if source == getattr(self, "manual_input", None) and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Up:
+                if self.manual_history:
+                    if self.history_index > 0:
+                        self.history_index -= 1
+                        self.manual_input.setText(self.manual_history[self.history_index])
+                    elif self.history_index == -1:
+                        self.history_index = len(self.manual_history) - 1
+                        self.manual_input.setText(self.manual_history[self.history_index])
+                return True
+            elif event.key() == Qt.Key.Key_Down:
+                if self.manual_history:
+                    if self.history_index < len(self.manual_history) - 1:
+                        self.history_index += 1
+                        self.manual_input.setText(self.manual_history[self.history_index])
+                    else:
+                        self.history_index = len(self.manual_history)
+                        self.manual_input.setText(self.last_manual_command)
+                return True
+        return super().eventFilter(source, event)
                 
     def on_send_command_clicked(self):
-        if not self.persistent_sock:
-            self.append_log("Erro: Socket não disponível. Conecte primeiro.")
+        prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        
+        if not state["persistent_sock"]:
+            self.append_log(f"Erro: Socket não disponível na aba {prefix}. Conecte primeiro.")
             return
 
-        cmd_code = self.command_combo.currentData()
+        command_combo = self._get_widget("command_combo")
+        cmd_code = command_combo.currentData()
         
-        # 1. Recuperar string final baseado no modo (Manual vs Catalogado)
         if cmd_code is None:
             command_str = self.param_inputs["_manual"].text().strip()
             if not command_str:
                 self.append_log("Preencha o comando manual antes de enviar.")
                 return
+            self.last_manual_command = command_str
+            if not self.manual_history or self.manual_history[-1] != command_str:
+                self.manual_history.append(command_str)
+                if len(self.manual_history) > 5:
+                    self.manual_history.pop(0)
+            self.history_index = -1
         else:
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             kwargs = {}
-            # Extrair os valores digitados ou selecionados
             for param_name, input_field in self.param_inputs.items():
                 if isinstance(input_field, list):
-                    # Lógica para checklist (RC)
                     selected_values = [cb.property("value") for cb in input_field if cb.isChecked()]
                     val = "]".join(selected_values)
                 elif isinstance(input_field, QComboBox):
                     val = input_field.currentData()
                 else:
                     val = input_field.text().strip()
-                
-                # Customização solicitada pelo usuário para o comando EU
                 if cmd_code == "EU":
-                    if param_name == "Matrícula2" and val:
-                        val = "}" + val
-                    elif param_name == "Senha" and val:
-                        val = "[" + val
-                
+                    if param_name == "Matrícula2" and val: val = "}" + val
+                    elif param_name == "Senha" and val: val = "[" + val
                 kwargs[param_name] = val
-                
             try:
-                # O comando delega a construção de si mesmo (Padrão Builder)
                 command_str = cmd_def.build(**kwargs)
             except ValueError as e:
-                # Bloqueia o envio e avisa o usuário se a validação falhar
                 QMessageBox.warning(self, "Erro de Validação", str(e))
                 self.append_log(f"Comando abortado: {e}")
                 return
 
-        # 2. Desabilitar botão e instanciar rotina (Comportamento original preservado)
-        self.send_button.setEnabled(False)
-        self.command_worker = CommandWorker(self.persistent_sock, command_str, self.session_key)
-        self.command_worker.sent_signal.connect(self.append_sent)
-        self.command_worker.sent_bytes_signal.connect(self.append_sent_bytes)
-        self.command_worker.received_signal.connect(self.append_received)
-        self.command_worker.received_bytes_signal.connect(self.append_received_bytes)
+        send_button = self._get_widget("send_button")
+        send_button.setEnabled(False)
+        self.command_worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
+        self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+        self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
         self.command_worker.finished_signal.connect(self.on_send_command_finished)
         self.command_worker.start()
 
-    # Novo evento para captar a tecla F7 e alternar as telas
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_F7:
-            current_idx = self.stacked_widget.currentIndex()
-            next_idx = (current_idx + 1) % self.stacked_widget.count()
-            self.stacked_widget.setCurrentIndex(next_idx)
+        if event.key() == Qt.Key.Key_F1:
+            self.stacked_widget.setCurrentIndex(0)
+            self.on_command_selected(0)
+        elif event.key() == Qt.Key.Key_F7:
+            self.stacked_widget.setCurrentIndex(1)
+        elif event.key() == Qt.Key.Key_F2:
+            self.stacked_widget.setCurrentIndex(2)
+            self.on_command_selected(0)
         else:
             super().keyPressEvent(event)
 
     def on_password_enter_pressed(self):
-        if self.connect_button.isEnabled():
-            self.on_connect_clicked()
+        prefix = self._get_active_prefix()
+        if prefix == "main_":
+            if self.main_connect_button.isEnabled():
+                self.on_connect_clicked()
+        else:
+            if self.client_btn_server_control.isEnabled():
+                self.on_connect_clicked()
 
     def validate_password_input(self):
-        password = self.password_input.text()
+        prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        password_input = self._get_widget("password_input")
+        password = password_input.text()
         
-        if not self.connected:
-            if not password:
-                self.connect_button.setEnabled(False)
-                return
-
+        if not state["connected"]:
             is_valid = len(password) == 6 and password.isdigit()
-            self.connect_button.setEnabled(is_valid)
+            if prefix == "main_":
+                self.main_connect_button.setEnabled(is_valid if password else False)
+            else:
+                self.client_btn_server_control.setEnabled(is_valid if password else False)
 
-
-    def set_inputs_enabled(self, enabled: bool):
-        self.ip_input.setEnabled(enabled)
-        self.port_input.setEnabled(enabled)
-        self.user_input.setEnabled(enabled)
-        self.password_input.setEnabled(enabled)
+    def set_inputs_enabled(self, enabled: bool, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        getattr(self, f"{prefix}ip_input").setEnabled(enabled)
+        getattr(self, f"{prefix}port_input").setEnabled(enabled)
+        getattr(self, f"{prefix}user_input").setEnabled(enabled)
+        getattr(self, f"{prefix}password_input").setEnabled(enabled)
 
     def load_config(self):
-        self.ip_input.setText(self.settings.value('ip', '192.168.60.83'))
-        self.port_input.setText(str(self.settings.value('port', 3000)))
-        self.user_input.setText(self.settings.value('user', 'teste fabrica'))
-        self.password_input.setText(self.settings.value('password', '111111'))
+        # Restaurar geometria da janela (posição e tamanho)
+        geom = self.settings.value("geometry")
+        if geom:
+            self.restoreGeometry(geom)
+
+        self.main_ip_input.setText(self.settings.value('ip', '192.168.60.83'))
+        self.main_port_input.setText(str(self.settings.value('port', 3000)))
+        self.main_user_input.setText(self.settings.value('user', 'teste fabrica'))
+        self.main_password_input.setText(self.settings.value('password', '111111'))
+        
+        self.client_ip_input.setText(get_local_ip())
+        self.client_port_input.setText(str(self.settings.value('client_port', 3000)))
+        self.client_user_input.setText(self.settings.value('user', 'teste fabrica'))
+        self.client_password_input.setText(self.settings.value('password', '111111'))
+        
+        saved_history = self.settings.value('manual_history', [])
+        if isinstance(saved_history, list): self.manual_history = saved_history
+        self.last_manual_command = self.settings.value('last_manual_command', '01+RH+00')
+        
+        # Restaurar a última aba ativa
+        active_tab = self.settings.value("active_tab", 0)
+        self.stacked_widget.setCurrentIndex(int(active_tab))
+        
         self.validate_password_input()
+        # Atualiza os campos do comando para a aba que foi restaurada
+        self.on_command_selected(0)
 
     def save_config(self):
-        self.settings.setValue('ip', self.ip_input.text())
-        self.settings.setValue('port', self.port_input.text())
-        self.settings.setValue('user', self.user_input.text())
-        self.settings.setValue('password', self.password_input.text())
+        prefix = self._get_active_prefix()
+        ip_input = getattr(self, f"{prefix}ip_input")
+        port_input = getattr(self, f"{prefix}port_input")
+        user_input = getattr(self, f"{prefix}user_input")
+        password_input = getattr(self, f"{prefix}password_input")
+
+        if prefix == "main_":
+            self.settings.setValue('ip', ip_input.text())
+            self.settings.setValue('port', port_input.text())
+        else:
+            self.settings.setValue('client_port', port_input.text())
+            
+        self.settings.setValue('user', user_input.text())
+        self.settings.setValue('password', password_input.text())
+        self.settings.setValue('manual_history', self.manual_history)
+        self.settings.setValue('last_manual_command', self.last_manual_command)
         self.settings.sync() 
 
     def append_log(self, message: str):
         self.log_output.append(message)
 
-    def update_sent_received_output(self):
+    def update_sent_received_output(self, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        sent_output = getattr(self, f"{prefix}sent_output")
+        received_output = getattr(self, f"{prefix}received_output")
+
         if self.show_bytes:
-            self.sent_output.setPlainText(self.last_sent_bytes)
-            self.received_output.setPlainText(self.last_received_bytes)
+            sent_output.setPlainText(state["last_sent_bytes"])
+            received_output.setPlainText(state["last_received_bytes"])
         else:
-            self.sent_output.setPlainText(self.last_sent_text)
-            self.received_output.setPlainText(self.last_received_text)
+            sent_output.setPlainText(state["last_sent_text"])
+            received_output.setPlainText(state["last_received_text"])
             
-        # Rola a barra vertical automaticamente para o final em ambas as caixas
-        self.sent_output.verticalScrollBar().setValue(self.sent_output.verticalScrollBar().maximum())
-        self.received_output.verticalScrollBar().setValue(self.received_output.verticalScrollBar().maximum())
+        sent_output.verticalScrollBar().setValue(sent_output.verticalScrollBar().maximum())
+        received_output.verticalScrollBar().setValue(received_output.verticalScrollBar().maximum())
 
-    def append_sent(self, text: str):
-        if self.last_sent_text:
-            self.last_sent_text += "\n" + text
-        else:
-            self.last_sent_text = text
-        self.update_sent_received_output()
+    def append_sent(self, text: str, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        if state["last_sent_text"]: state["last_sent_text"] += "\n" + text
+        else: state["last_sent_text"] = text
+        self.update_sent_received_output(prefix)
 
-    def append_sent_bytes(self, hex_text: str):
-        if self.last_sent_bytes:
-            self.last_sent_bytes += "\n" + hex_text
-        else:
-            self.last_sent_bytes = hex_text
-        self.update_sent_received_output()
+    def append_sent_bytes(self, hex_text: str, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        if state["last_sent_bytes"]: state["last_sent_bytes"] += "\n" + hex_text
+        else: state["last_sent_bytes"] = hex_text
+        self.update_sent_received_output(prefix)
     
-    def append_received(self, text: str):
-        if self.last_received_text:
-            self.last_received_text += "\n" + text
-        else:
-            self.last_received_text = text
-        self.update_sent_received_output()
+    def append_received(self, text: str, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        if state["last_received_text"]: state["last_received_text"] += "\n" + text
+        else: state["last_received_text"] = text
+        self.update_sent_received_output(prefix)
 
-    def append_received_bytes(self, hex_text: str):
-        if self.last_received_bytes:
-            self.last_received_bytes += "\n" + hex_text
-        else:
-            self.last_received_bytes = hex_text
-        self.update_sent_received_output()
+    def append_received_bytes(self, hex_text: str, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        if state["last_received_bytes"]: state["last_received_bytes"] += "\n" + hex_text
+        else: state["last_received_bytes"] = hex_text
+        self.update_sent_received_output(prefix)
 
     def on_toggle_display_mode(self):
         self.show_bytes = not self.show_bytes
-        self.toggle_mode_button.setText("Exibir em string" if self.show_bytes else "Exibir em bytes")
-        self.update_sent_received_output()
+        btn_text = "Exibir em string" if self.show_bytes else "Exibir em bytes"
+        self.main_toggle_mode_button.setText(btn_text)
+        self.client_toggle_mode_button.setText(btn_text)
+        self.update_sent_received_output("main_")
+        self.update_sent_received_output("client_")
 
     def animate_connecting_button(self):
+        # 🔹 REQUISITO 2: Timer afeta apenas a aba F1
         self.dot_count = (self.dot_count + 1) % 4
         dots = "." * self.dot_count
-        self.connect_button.setText(f"Conectando{dots}")
+        self.main_connect_button.setText(f"Conectando{dots}")
 
     def on_send_command_finished(self, success: bool, message: str):
         self.append_log(message)
-        self.send_button.setEnabled(True)
+        prefix = self._get_active_prefix()
+        getattr(self, f"{prefix}send_button").setEnabled(True)
         if not success:
-            # Se falhou o envio do comando, pode ser que a conexão tenha caído.
-            self.append_log("Possível perda de conexão. Desconectando...")
-            self.disconnect()
+            self.append_log(f"Falha no comando ({prefix}): Verifique a conexão.")
 
     def on_clear_clicked(self):
-        self.last_sent_text = ""
-        self.last_sent_bytes = ""
-        self.last_received_text = ""
-        self.last_received_bytes = ""
-        self.update_sent_received_output()
-        self.append_log("Campos limpos.")
+        prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        state["last_sent_text"] = ""
+        state["last_sent_bytes"] = ""
+        state["last_received_text"] = ""
+        state["last_received_bytes"] = ""
+        self.update_sent_received_output(prefix)
+        self.append_log(f"Campos da aba {prefix} limpos.")
 
+    # 🔹 REQUISITO 2: Refatoração da Lógica de Conexão (F1 vs F2)
     def on_connect_clicked(self):
-        self.append_log(f"Botão Conectar clicado (connected={self.connected})")
-        if self.connected:
-            self.disconnect()
+        prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+        
+        # Lógica de Desconexão (Compartilhada)
+        if state["connected"]:
+            self.disconnect(prefix)
             return
 
-        ip = self.ip_input.text().strip()
-        port_text = self.port_input.text().strip()
-        user = self.user_input.text().strip()
-        password = self.password_input.text().strip()
+        # Para Aba Cliente, se o worker estiver rodando (servidor ativo mas sem cliente), desliga
+        if prefix == "client_" and state["worker"] and state["worker"].isRunning():
+            self.disconnect(prefix)
+            return
+
+        ip = getattr(self, f"{prefix}ip_input").text().strip()
+        port_text = getattr(self, f"{prefix}port_input").text().strip()
+        user = getattr(self, f"{prefix}user_input").text().strip()
+        password = getattr(self, f"{prefix}password_input").text().strip()
 
         if not ip or not port_text or not user or not password:
             self.append_log("Preencha todos os campos antes de conectar.")
             return
 
-        try:
-            port = int(port_text)
+        try: port = int(port_text)
         except ValueError:
-            self.append_log("Porta inválida; insira um número inteiro.")
+            self.append_log("Porta inválida.")
             return
 
         self.save_config()
-
-        self.connect_button.setEnabled(False)
-        self.connect_button.setText("Conectando")
-        self.dot_count = 0
-        self.connect_timer.start(350) 
-
         self.log_output.clear()
 
-        self.worker = NetworkWorker(ip, port, user, password)
-        self.worker.log_signal.connect(self.append_log)
-        self.worker.finished_signal.connect(self.on_finished)
-        self.worker.start()
-
-    def disconnect(self):
-        if self.persistent_sock:
-            try:
-                self.persistent_sock.close()
-            except:
-                pass
-            self.persistent_sock = None
-        
-        self.session_key = None
-        self.connected = False
-        self.connect_button.setText("Conectar")
-        self.connect_button.setEnabled(True)
-        self.send_button.setEnabled(False)
-        self.set_inputs_enabled(True)
-        self.append_log("Desconectado.")
-
-    def on_finished(self, success: bool, message: str, sock=None, session_key=None):
-        self.connect_timer.stop()
-        self.dot_count = 0
-        self.append_log(message)
-        if success:
-            self.persistent_sock = sock
-            self.session_key = session_key
-            self.connected = True
-            self.connect_button.setText("Desconectar")
-            self.send_button.setEnabled(True)
-            self.set_inputs_enabled(False)
-            self.append_log("Fluxo de autenticação concluído com êxito.")
-            QMessageBox.information(self, "Conexão", "Conexão bem sucedida")
+        if prefix == "main_":
+            self.main_connect_button.setEnabled(False)
+            self.connect_timer.start(350) 
+            state["worker"] = NetworkWorker(ip, port, user, password)
         else:
-            self.connected = False
-            self.connect_button.setText("Conectar")
-            self.send_button.setEnabled(False)
-            self.set_inputs_enabled(True)
-            self.append_log("Fluxo de autenticação finalizado com erro.")
+            # 🔹 REQUISITO 2: Interface F2 ignora timer/animacao
+            self.client_btn_server_control.setText("Desligar Servidor")
+            self.client_btn_client_state.setText("Aguardando Conexão")
+            self.client_btn_client_state.setEnabled(False)
+            state["worker"] = ClientNetworkWorker(ip, port, user, password)
+            
+        state["worker"].log_signal.connect(self.append_log)
+        state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
+        state["worker"].start()
+
+    def disconnect(self, prefix=None):
+        if prefix is None: prefix = self._get_active_prefix()
+        state = self.tab_data[prefix]
+
+        if state["listener_worker"]:
+            state["listener_worker"].stop()
+            state["listener_worker"].wait()
+            state["listener_worker"] = None
+
+        if state["worker"]:
+            if isinstance(state["worker"], ClientNetworkWorker):
+                state["worker"].stop()
+            state["worker"].terminate()
+            state["worker"].wait()
+            state["worker"] = None
+
+        if state["persistent_sock"]:
+            try: state["persistent_sock"].close()
+            except: pass
+            state["persistent_sock"] = None
+        
+        state["session_key"] = None
+        state["connected"] = False
+        
+        # 🔹 REQUISITO 2: Reset dos botões específicos da aba
+        if prefix == "main_":
+            self.connect_timer.stop()
+            self.main_connect_button.setText("Conectar")
+            self.main_connect_button.setEnabled(True)
+        else:
+            self.client_btn_server_control.setText("Iniciar Servidor")
+            self.client_btn_server_control.setEnabled(True)
+            self.client_btn_client_state.setText("Aguardando Conexão")
+            self.client_btn_client_state.setEnabled(False)
+
+        getattr(self, f"{prefix}send_button").setEnabled(False)
+        self.set_inputs_enabled(True, prefix)
+        self.append_log(f"Estado resetado ({prefix}).")
+
+    def on_listener_error(self, error_msg, prefix):
+        self.append_log(f"Erro na escuta ({prefix}): {error_msg}")
+        self.disconnect(prefix)
+
+    # 🔹 REQUISITO 2: Refatoração do on_finished para botões independentes
+    def on_finished(self, success: bool, message: str, sock, session_key, prefix):
+        if prefix == "main_":
+            self.connect_timer.stop()
+            self.dot_count = 0
+        
+        self.append_log(message)
+        state = self.tab_data[prefix]
+        
+        if success:
+            state["persistent_sock"] = sock
+            state["session_key"] = session_key
+            state["connected"] = True
+            
+            if prefix == "main_":
+                self.main_connect_button.setText("Desconectar")
+                self.main_connect_button.setEnabled(True)
+            else:
+                self.client_btn_client_state.setText("Desconectar")
+                self.client_btn_client_state.setEnabled(True)
+                self.client_btn_server_control.setText("Desligar Servidor")
+
+            getattr(self, f"{prefix}send_button").setEnabled(True)
+            self.set_inputs_enabled(False, prefix)
+            
+            state["listener_worker"] = ListenerWorker(state["persistent_sock"], state["session_key"])
+            state["listener_worker"].received_signal.connect(lambda txt: self.append_received(txt, prefix))
+            state["listener_worker"].received_bytes_signal.connect(lambda hex_txt: self.append_received_bytes(hex_txt, prefix))
+            state["listener_worker"].error_signal.connect(lambda err: self.on_listener_error(err, prefix))
+            state["listener_worker"].start()
+            
+            QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
+        else:
+            state["connected"] = False
+            if prefix == "main_":
+                self.main_connect_button.setText("Conectar")
+                self.main_connect_button.setEnabled(True)
+            else:
+                self.client_btn_server_control.setText("Iniciar Servidor")
+                self.client_btn_client_state.setText("Aguardando Conexão")
+                self.client_btn_client_state.setEnabled(False)
+
+            getattr(self, f"{prefix}send_button").setEnabled(False)
+            self.set_inputs_enabled(True, prefix)
+            
+            # Tradução amigável para erro de soquete em uso (WinError 10013 ou 10048)
+            if "10013" in message or "10048" in message:
+                message = "Soquete em uso por outra aplicação"
+                
             QMessageBox.critical(self, "Erro de Conexão", message)
-        self.connect_button.setEnabled(True)
+
 
 def main():
     app = QApplication(sys.argv)

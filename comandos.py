@@ -151,6 +151,59 @@ registrar_comando(CommandDefinition(
                 {"label": "FEW_PAPER - Configuração do sensor de pouco papel (sensor bobina)", "value": "FEW_PAPER"},
                 {"label": "DIGITO_OCULTO - Ativa uma máscara quando da digitação da matricula", "value": "DIGITO_OCULTO"},
                 {"label": "ACENTOS - Trata a impressão de acentos nos tickets", "value": "ACENTOS"},
+                {"label": "MENSAGEM - Mostra uma mensagem no display do equipamento", "value": "MENSAGEM"},
+                {"label": "NOBREAK - Habilita o monitoramento do nobreak do equipamento", "value": "NOBREAK"},
+                {"label": "GMT - Fuso horário no qual o equipamento está localizado", "value": "GMT"},
+                {"label": "NR_REP - Número do REP", "value": "NR_REP"},
+                {"label": "LEITOR_CARTAO - Tipo do leitor de cartão", "value": "LEITOR_CARTAO"},
+                {"label": "LEITOR_BIOMETRIA - Tipo do leitor de biometria", "value": "LEITOR_BIOMETRIA"},
+                {"label": "MODELO - Retorna o modelo configurado no equipamento", "value": "MODELO"},
+                {"label": "ID_SOFTWARE - Retorna o identificador do software", "value": "ID_SOFTWARE"},
+                {"label": "CHAVE_PUBLICA - Retorna a chave pública", "value": "CHAVE_PUBLICA"},
+                {"label": "VERSAO_PRODUTO - Retorna a versão do firmware do equipamento", "value": "VERSAO_PRODUTO"},
+                {"label": "VERSAO_MEM - Retorna a versão do firmware da MRP", "value": "VERSAO_MEM"},
+                {"label": "VERSAO_PROTOCOLO - Retorna a versão do protocolo do equipamento", "value": "VERSAO_PROTOCOLO"},
+                {"label": "BIO_PREVIEW - Mostra ou não a amostra de captura do equipamento facial", "value": "BIO_PREVIEW"},
+                {"label": "TEMPLATE - Retorna tipo de template da biometria", "value": "TEMPLATE"},
+                {"label": "ACORDO_SIND - Número do contrato do acordo sindical composto de 17 números", "value": "ACORDO_SIND"},
+                {"label": "IP - IP do equipamento.", "value": "IP"},
+                {"label": "MASC_SUBREDE - Máscara de subrede.", "value": "MASC_SUBREDE"},
+                {"label": "DNS - DNS.", "value": "DNS"},
+                {"label": "GATEWAY - Gateway.", "value": "GATEWAY"},
+                {"label": "MAC - MAC do equipamento.", "value": "MAC"},
+                {"label": "PORTA_TCP - Porta de comunicação Tcp/IP.", "value": "PORTA_TCP"},
+                {"label": "VEL_SERIAL - Velocidade de comunicação Serial.", "value": "VEL_SERIAL"},
+                {"label": "TIPO_COM - Tipo de comunicação.", "value": "TIPO_COM"},
+                {"label": "CON_SEGURA - Indica se o Prisma deverá utilizar comunicação segura.", "value": "CON_SEGURA"},
+                {"label": "IP_CON_SEGURA - IP que será utilizado na comunicação segura.", "value": "IP_CON_SEGURA"},
+                {"label": "DHCP - Indica se equipamento deve ou não utilizar recurso de DHCP.", "value": "DHCP"},
+                {"label": "MODE - Modo de conexão da comunicação TcpIP (cliente ou servidor).", "value": "MODE"},
+                {"label": "RECONEXAO_IMEDIATA - Configuração do modo de reconexão com servidor client.", "value": "RECONEXAO_IMEDIATA"},
+                {"label": "IP_SERVER - IP em que o equipamento irá conectar quando estiver no modo cliente.", "value": "IP_SERVER"},
+                {"label": "SERVER_PORT - Porta em que o equipamento irá conectar quando estiver no modo cliente.", "value": "SERVER_PORT"},
+                {"label": "HOSTNAME - Nome de rede que o equipamento assume.", "value": "HOSTNAME"},
+                {"label": "NTP - Ativa a sincronização de horário com a internet.", "value": "NTP"},
+                {"label": "NTP_SERVER - IP do servidor de consulta de horário.", "value": "NTP_SERVER"},
+                {"label": "NTP_TIMEOUT - Tolerância entre consultas.", "value": "NTP_TIMEOUT"},
+                {"label": "IP_W - IP do equipamento.", "value": "IP_W"},
+                {"label": "MASC_SUBREDE_W - Máscara de subrede.", "value": "MASC_SUBREDE_W"},
+                {"label": "DNS_W - DNS.", "value": "DNS_W"},
+                {"label": "GATEWAY_W - Gateway.", "value": "GATEWAY_W"},
+                {"label": "MAC_W - MAC do equipamento.", "value": "MAC_W"},
+                {"label": "PORTA_TCP_W - Porta de comunicação Tcp/IP.", "value": "PORTA_TCP_W"},
+                {"label": "CON_SEGURA_W - Indica se o Prisma deverá utilizar comunicação segura.", "value": "CON_SEGURA_W"},
+                {"label": "IP_CON_SEGURA_W - IP que será utilizado na comunicação segura.", "value": "IP_CON_SEGURA_W"},
+                {"label": "DHCP_W - Indica se equipamento deve ou não utilizar recurso de DHCP.", "value": "DHCP_W"},
+                {"label": "MODE_W - Modo de conexão da comunicação TcpIP (cliente ou servidor).", "value": "MODE_W"},
+                {"label": "RECONEXAO_IMEDIATA_W - Configuração do modo de reconexão com servidor client.", "value": "RECONEXAO_IMEDIATA_W"},
+                {"label": "IP_SERVER_W - IP em que o equipamento irá conectar quando estiver no modo cliente.", "value": "IP_SERVER_W"},
+                {"label": "SERVER_PORT_W - Porta em que o equipamento irá conectar quando estiver no modo cliente.", "value": "SERVER_PORT_W"},
+                {"label": "USAR_DNS_W - Sinaliza se a conexão com o servidor deve ser via IP ou via nome.", "value": "USAR_DNS_W"},
+                {"label": "ADDR_SERVER_W - Nome do servidor a conectar.", "value": "ADDR_SERVER_W"},
+                {"label": "NET_NAME - Nome da rede do access point principal.", "value": "NET_NAME"},
+                {"label": "NET_PWD - Senha da rede do access point principal.", "value": "NET_PWD"},
+                {"label": "NET_NAME_02 - Nome da rede do access point secundário.", "value": "NET_NAME_02"},
+                {"label": "NET_PWD_02 - Senha da rede do access point secundário.", "value": "NET_PWD_02"},
             ]
         )
     ]
@@ -235,5 +288,76 @@ registrar_comando(CommandDefinition(
             required=True, 
             description="CPF"    
         ) 
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RR-M",
+    description="Receber registros (Por Memória): Solicita registros a partir de um endereço.",
+    template="01+RR+00+M]{QTD}]{Endereço}",
+    params=[
+        CommandParam(
+            name="QTD",
+            type=int,
+            default=10,
+            required=True,
+            description="Quantidade de registros"
+        ),
+        CommandParam(
+            name="Endereço",
+            type=int,
+            default=0,
+            required=True,
+            description="Endereço de memória inicial (apenas números)"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RR-N",
+    description="Receber registros (Por NSR): Solicita registros a partir de um NSR.",
+    template="01+RR+00+N]{QTD}]{NSR}",
+    params=[
+        CommandParam(
+            name="QTD",
+            type=int,
+            default=10,
+            required=True,
+            description="Quantidade de registros"
+        ),
+        CommandParam(
+            name="NSR",
+            type=int,
+            default=1,
+            required=True,
+            description="NSR inicial (apenas números)"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RR-D",
+    description="Receber registros (Por Data): Solicita registros a partir de uma data/hora.",
+    template="01+RR+00+D]{QTD}]{Data} {Hora}",
+    params=[
+        CommandParam(
+            name="QTD",
+            type=int,
+            default=10,
+            required=True,
+            description="Quantidade de registros"
+        ),
+        CommandParam(
+            name="Data",
+            type=str,
+            required=True,
+            description="Data inicial (DD/MM/AAAA)"
+        ),
+        CommandParam(
+            name="Hora",
+            type=str,
+            required=True,
+            description="Hora inicial (HH:MM:SS)"
+        )
     ]
 ))
