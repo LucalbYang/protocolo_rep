@@ -230,17 +230,22 @@ class NetworkWorker(QThread):
         self.port = port
         self.user = user
         self.password = password
+        self.running = True
+
+    def stop(self):
+        self.running = False
 
     def run(self):
         start_time = time.time()
         timeout_limit = 10.0
         last_error = "Tempo esgotado"
 
-        while (time.time() - start_time) < timeout_limit:
+        while self.running and (time.time() - start_time) < timeout_limit:
             sock = None
             try:
                 self.log_signal.emit(f"Tentando conectar a {self.ip}:{self.port}...")
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.settimeout(2)
                 sock.connect((self.ip, self.port))
 
@@ -290,12 +295,21 @@ class NetworkWorker(QThread):
 
             except Exception as e:
                 last_error = str(e)
-                self.log_signal.emit(f"Falha na tentativa: {e}. Retentando em 350ms...")
+                if self.running:
+                    self.log_signal.emit(f"Falha na tentativa: {e}. Retentando em 350ms...")
                 if sock:
-                    sock.close()
-                time.sleep(0.35)
+                    try: sock.close()
+                    except: pass
+                
+                # Aguarda 350ms em pequenos pedaços para responder ao stop() mais rápido
+                for _ in range(7):
+                    if not self.running: break
+                    time.sleep(0.05)
 
-        self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"")
+        if not self.running:
+            self.finished_signal.emit(False, "Operação cancelada pelo usuário.", None, b"")
+        else:
+            self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"")
 
 
 class ClientNetworkWorker(QThread):
@@ -310,8 +324,10 @@ class ClientNetworkWorker(QThread):
         self.user = user
         self.password = password
         self.server_sock = None
+        self.running = True
 
     def stop(self):
+        self.running = False
         if self.server_sock:
             try:
                 self.server_sock.close()
@@ -330,9 +346,16 @@ class ClientNetworkWorker(QThread):
             self.log_signal.emit("Aguardando conexão do equipamento...")
             try:
                 sock, addr = self.server_sock.accept()
-            except Exception as e:
+                # 🔹 REQUISITO: Fechar o socket servidor imediatamente após aceitar a conexão
+                # Isso libera a porta para outras aplicações enquanto atendemos este cliente.
                 if self.server_sock:
-                    self.finished_signal.emit(False, f"Servidor parado: {e}", None, b"")
+                    self.server_sock.close()
+                    self.server_sock = None
+            except Exception as e:
+                if self.running:
+                    self.finished_signal.emit(False, f"Erro ao aceitar conexão: {e}", None, b"")
+                else:
+                    self.finished_signal.emit(False, "Servidor parado pelo usuário.", None, b"")
                 return
 
             self.log_signal.emit(f"Conexão recebida de {addr}. Iniciando handshake...")
@@ -376,11 +399,13 @@ class ClientNetworkWorker(QThread):
                 sock.close()
 
         except Exception as e:
-            self.log_signal.emit(f"Erro no modo cliente: {e}")
-            self.finished_signal.emit(False, str(e), None, b"")
+            if self.running:
+                self.log_signal.emit(f"Erro no modo cliente: {e}")
+                self.finished_signal.emit(False, str(e), None, b"")
         finally:
             if self.server_sock:
-                self.server_sock.close()
+                try: self.server_sock.close()
+                except: pass
 
 
 class CommandWorker(QThread):
@@ -542,8 +567,12 @@ class EvoRepAuthApp(QWidget):
         self.on_command_selected(0)
 
     def closeEvent(self, event):
-        """Salva todas as configurações e a geometria da janela ao fechar."""
+        """Salva todas as configurações e desconecta sockets ao fechar."""
         self.save_config()
+        # Garantir fechamento de todos os sockets ativos
+        self.disconnect("main_")
+        self.disconnect("client_")
+        
         # Salva posição e tamanho da janela
         self.settings.setValue("geometry", self.saveGeometry())
         # Salva a aba atual
@@ -710,8 +739,11 @@ class EvoRepAuthApp(QWidget):
         setattr(self, f"{prefix}cmd_description_label", cmd_description_label)
 
         # Conectar sinais
+        ip_input.returnPressed.connect(self.on_enter_pressed)
+        port_input.returnPressed.connect(self.on_enter_pressed)
+        user_input.returnPressed.connect(self.on_enter_pressed)
+        password_input.returnPressed.connect(self.on_enter_pressed)
         password_input.textChanged.connect(self.validate_password_input)
-        password_input.returnPressed.connect(self.on_password_enter_pressed)
         command_combo.currentIndexChanged.connect(self.on_command_selected)
         send_button.clicked.connect(self.on_send_command_clicked)
         clear_button.clicked.connect(self.on_clear_clicked)
@@ -754,6 +786,7 @@ class EvoRepAuthApp(QWidget):
             cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la sem validação.")
             self.manual_input = QLineEdit(self.last_manual_command)
             self.manual_input.installEventFilter(self)
+            self.manual_input.returnPressed.connect(self.on_enter_pressed)
             dynamic_layout.addRow("Comando Bruto:", self.manual_input)
             self.param_inputs["_manual"] = self.manual_input
         else:
@@ -787,6 +820,7 @@ class EvoRepAuthApp(QWidget):
                 else:
                     input_field = QLineEdit(str(param.default))
                     input_field.setPlaceholderText(param.description)
+                    input_field.returnPressed.connect(self.on_enter_pressed)
 
                     if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
                         input_field.setInputMask("99/99/99;_")
@@ -901,17 +935,27 @@ class EvoRepAuthApp(QWidget):
         elif event.key() == Qt.Key.Key_F2:
             self.stacked_widget.setCurrentIndex(2)
             self.on_command_selected(0)
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.on_enter_pressed()
         else:
             super().keyPressEvent(event)
 
-    def on_password_enter_pressed(self):
+    def on_enter_pressed(self):
         prefix = self._get_active_prefix()
         if prefix == "main_":
-            if self.main_connect_button.isEnabled():
-                self.on_connect_clicked()
-        else:
-            if self.client_btn_server_control.isEnabled():
-                self.on_connect_clicked()
+            if self.main_connect_button.text() == "Conectar":
+                if self.main_connect_button.isEnabled():
+                    self.on_connect_clicked()
+            elif self.main_connect_button.text() == "Desconectar":
+                if self.main_send_button.isEnabled():
+                    self.on_send_command_clicked()
+        elif prefix == "client_":
+            if self.client_btn_server_control.text() == "Iniciar Servidor":
+                if self.client_btn_server_control.isEnabled():
+                    self.on_connect_clicked()
+            elif self.client_btn_client_state.text() == "Desconectar":
+                if self.client_send_button.isEnabled():
+                    self.on_send_command_clicked()
 
     def validate_password_input(self):
         prefix = self._get_active_prefix()
@@ -1109,20 +1153,32 @@ class EvoRepAuthApp(QWidget):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
 
+        # 1. Parar o ListenerWorker primeiro (ele usa o persistent_sock)
         if state["listener_worker"]:
             state["listener_worker"].stop()
-            state["listener_worker"].wait()
+            # O shutdown do socket abaixo fará o recv() do listener retornar imediatamente
+            if state["persistent_sock"]:
+                try: state["persistent_sock"].shutdown(socket.SHUT_RDWR)
+                except: pass
+            state["listener_worker"].wait(500)
             state["listener_worker"] = None
 
+        # 2. Parar Workers de conexão (NetworkWorker / ClientNetworkWorker)
         if state["worker"]:
-            if isinstance(state["worker"], ClientNetworkWorker):
+            if hasattr(state["worker"], "stop"):
                 state["worker"].stop()
-            state["worker"].terminate()
-            state["worker"].wait()
+            state["worker"].quit()
+            if not state["worker"].wait(1000):
+                state["worker"].terminate()
+                state["worker"].wait()
             state["worker"] = None
 
+        # 3. Fechar o Socket Persistente com LINGER para liberação imediata
         if state["persistent_sock"]:
-            try: state["persistent_sock"].close()
+            try:
+                # l_onoff=1, l_linger=0 faz um close abortivo (RST), evitando TIME_WAIT
+                state["persistent_sock"].setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, bytes([1,0,0,0,0,0,0,0]))
+                state["persistent_sock"].close()
             except: pass
             state["persistent_sock"] = None
         
