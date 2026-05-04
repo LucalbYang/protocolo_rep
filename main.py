@@ -514,6 +514,35 @@ def get_local_ip():
             return "127.0.0.1"
 
 
+# Dicionário de escolhas para o comando EC (Enviar Configuração)
+EC_VAL_CHOICES = {
+    "LEITOR_VER_DIG": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "EVENTO_ON": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "EXP_NR_REP": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "TECLADO_MANUT": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "SENSOR_CORTE": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "FEW_PAPER": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "DIGITO_OCULTO": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "ACENTOS": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "NOBREAK": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "BEEP_TECLADO": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "BIO_PREVIEW": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "CON_SEGURA": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "RECONEXAO_IMEDIATA": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "NTP": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "CON_SEGURA_W": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "RECONEXAO_IMEDIATA_W": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "USAR_DNS_W": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
+    "MODO_CADASTRO[P]": [{"label": "P - Padrão", "value": "P"}, {"label": "D - Dinâmico", "value": "D"}],
+    "COR_SENSOR[G]": [{"label": "G - Green", "value": "G"}, {"label": "R - Red", "value": "R"}, {"label": "B - Blue", "value": "B"}],
+    "TEMPLATE[P]": [{"label": "P - Padrão", "value": "P"}, {"label": "I - ISO", "value": "I"}, {"label": "A - ANSI", "value": "A"}],
+    "VEL_SERIAL": [{"label": "9600", "value": "9600"}, {"label": "19200", "value": "19200"}, {"label": "57600", "value": "57600"}, {"label": "115200", "value": "115200"}],
+    "TIPO_COM": [{"label": "S - Serial", "value": "S"}, {"label": "T - TCP", "value": "T"}],
+    "MODE": [{"label": "C - Cliente", "value": "C"}, {"label": "S - Servidor", "value": "S"}],
+    "MODE_W": [{"label": "C - Cliente", "value": "C"}, {"label": "S - Servidor", "value": "S"}],
+}
+
+
 class EvoRepAuthApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -816,6 +845,10 @@ class EvoRepAuthApp(QWidget):
                             input_field.addItem(choice['label'], choice['value'])
                         dynamic_layout.addRow(label_text, input_field)
                         self.param_inputs[param.name] = input_field
+                        
+                        # Lógica especial para o comando EC
+                        if cmd_code == "EC" and param.name == "Configuração":
+                            input_field.currentIndexChanged.connect(self.update_ec_valor_field)
                         continue
                 else:
                     input_field = QLineEdit(str(param.default))
@@ -851,6 +884,53 @@ class EvoRepAuthApp(QWidget):
 
             if pending_data_field is not None:
                 dynamic_layout.addRow(pending_data_label, pending_data_field)
+            
+            # Inicializa o campo Valor do EC se necessário
+            if cmd_code == "EC":
+                self.update_ec_valor_field()
+
+    def update_ec_valor_field(self):
+        """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        config_combo = self.param_inputs.get("Configuração")
+        if not config_combo: return
+        
+        config_key = config_combo.currentData()
+        
+        # Remove o campo Valor atual (se houver)
+        old_valor_widget = self.param_inputs.get("Valor")
+        if old_valor_widget:
+            dynamic_layout.removeRow(old_valor_widget)
+            
+        choices = EC_VAL_CHOICES.get(config_key)
+        
+        if choices:
+            new_input = NoScrollComboBox()
+            for c in choices:
+                new_input.addItem(c['label'], c['value'])
+        else:
+            new_input = QLineEdit()
+            # Dicas de placeholder
+            if config_key == "LOGIN": new_input.setPlaceholderText("Máx 16 caracteres")
+            elif config_key == "SENHA_MENU": new_input.setPlaceholderText("6 dígitos")
+            elif config_key == "MENSAGEM": new_input.setPlaceholderText("Máx 20 caracteres")
+            elif config_key == "ACORDO_SIND": new_input.setPlaceholderText("17 dígitos")
+            elif config_key == "TAM_BOB": new_input.setPlaceholderText("0 ~ 400")
+            elif config_key == "TEMPO_LIB": new_input.setPlaceholderText("0 ~ 60")
+            elif config_key == "NTP_TIMEOUT": new_input.setPlaceholderText("1 ~ 99")
+            elif "PORT" in config_key:
+                new_input.setPlaceholderText("1000 ~ 65535")
+            elif any(x in config_key for x in ["IP", "DNS", "GATEWAY", "SERVER"]):
+                new_input.setPlaceholderText("Ex: 192.168.1.100")
+            elif "MAC" in config_key:
+                new_input.setPlaceholderText("Ex: 00:11:22:33:44:55")
+        
+        if hasattr(new_input, "returnPressed"):
+            new_input.returnPressed.connect(self.on_enter_pressed)
+            
+        dynamic_layout.addRow("Valor:", new_input)
+        self.param_inputs["Valor"] = new_input
 
     def eventFilter(self, source, event):
         if source == getattr(self, "manual_input", None) and event.type() == QEvent.Type.KeyPress:
