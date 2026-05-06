@@ -4,6 +4,7 @@ import socket
 import base64
 import traceback
 import time
+import random
 from comandos import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
@@ -41,6 +42,166 @@ class NoScrollComboBox(QComboBox):
             event.ignore()
         else:
             super().keyPressEvent(event)
+
+
+def generate_cpf():
+    """Gera um CPF válido aleatoriamente."""
+    def calculate_digit(digits):
+        weight = len(digits) + 1
+        total = sum(d * (weight - i) for i, d in enumerate(digits))
+        remainder = total % 11
+        return 0 if remainder < 2 else 11 - remainder
+
+    cpf_base = [random.randint(0, 9) for _ in range(9)]
+    cpf_base.append(calculate_digit(cpf_base))
+    cpf_base.append(calculate_digit(cpf_base))
+    return "".join(map(str, cpf_base))
+
+def generate_random_name():
+    first_names = [
+        "Daniel", "Sophia", "Pedro", "Lucas", "Mariana", "Julia", "Enzo", "Valentina", "Gabriel", "Isabella",
+        "João", "Maria", "Ana", "Carlos", "Rafael", "Beatriz", "Mateus", "Laura", "Felipe", "Letícia",
+        "Thiago", "Camila", "Bruno", "Amanda", "Gustavo", "Carolina", "Leonardo", "Bruna", "Rodrigo", "Fernanda",
+        "Marcelo", "Alice", "Guilherme", "Helena", "Arthur", "Lorena", "Ricardo", "Lívia", "Diego", "Manuela"
+    ]
+    
+    last_names = [
+        "Silva", "Martinez", "Carvalho", "Fonseca", "Oliveira", "Souza", "Pereira", "Costa", "Rodrigues", "Almeida",
+        "Santos", "Ferreira", "Gomes", "Rocha", "Ribeiro", "Alves", "Monteiro", "Mendes", "Barros", "Lima",
+        "Teixeira", "Cavalcanti", "Moraes", "Nunes", "Dias", "Cardoso", "Castro", "Cunha", "Melo", "Pinto",
+        "Farias", "Machado", "Araújo", "Freitas", "Borges", "Batista", "Moreira", "Marques", "Neves", "Correia"
+    ]
+    
+    return f"{random.choice(first_names)} {random.choice(last_names)}"
+
+class MacroWindow(QWidget):
+    def __init__(self, parent_app, prefix):
+        super().__init__()
+        self.parent_app = parent_app
+        self.prefix = prefix
+        self.setWindowTitle(f"Macro - {prefix.replace('_', '').upper()}")
+        self.setMinimumSize(400, 250)
+        
+        layout = QVBoxLayout()
+        
+        group_box = QGroupBox("Gerar Colaboradores")
+        group_layout = QFormLayout()
+        
+        self.count_input = QLineEdit("10")
+        group_layout.addRow("Quantidade:", self.count_input)
+        
+        self.btn_bulk = QPushButton("Gerar todos de uma vez")
+        self.btn_sequential = QPushButton("Gerar um por um")
+        self.btn_delete_last = QPushButton("Deletar últimos gerados")
+        self.btn_delete_last.setVisible(False)
+        self.btn_delete_last.setStyleSheet("background-color: #ffebee; color: #c62828;")
+        
+        group_layout.addRow(self.btn_bulk)
+        group_layout.addRow(self.btn_sequential)
+        group_layout.addRow(self.btn_delete_last)
+        
+        group_box.setLayout(group_layout)
+        layout.addWidget(group_box)
+        
+        self.log_output = QTextEdit()
+        self.log_output.setReadOnly(True)
+        layout.addWidget(QLabel("Status:"))
+        layout.addWidget(self.log_output)
+        
+        self.setLayout(layout)
+        
+        self.btn_bulk.clicked.connect(self.on_bulk_clicked)
+        self.btn_sequential.clicked.connect(self.on_sequential_clicked)
+        self.btn_delete_last.clicked.connect(self.on_delete_last_clicked)
+        
+        self.is_running = False
+        self.queue = []
+        self.last_generated_ids = []
+
+    def log(self, msg):
+        self.log_output.append(msg)
+
+    def generate_employee_data(self):
+        return {
+            "id": generate_cpf(),
+            "nome": generate_random_name(),
+            "matricula": "".join(random.choices("0123456789", k=5))
+        }
+
+    def on_bulk_clicked(self):
+        if self.is_running: return
+        try:
+            count = int(self.count_input.text())
+        except:
+            QMessageBox.warning(self, "Erro", "Quantidade inválida")
+            return
+            
+        employees = [self.generate_employee_data() for _ in range(count)]
+        self.last_generated_ids = [emp['id'] for emp in employees]
+        
+        # 01+EU+00+{Quantidade}+I[{ID}[{NOME}[0[1[{Matricula}]...
+        parts = []
+        for emp in employees:
+            parts.append(f"I[{emp['id']}[{emp['nome']}[0[1[{emp['matricula']}]")
+            
+        command_str = f"01+EU+00+{count}+" + "".join(parts)
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log(f"Enviado comando bulk com {count} colaboradores.")
+        self.btn_delete_last.setVisible(True)
+
+    def on_sequential_clicked(self):
+        if self.is_running: return
+        try:
+            count = int(self.count_input.text())
+        except:
+            QMessageBox.warning(self, "Erro", "Quantidade inválida")
+            return
+            
+        self.queue = [self.generate_employee_data() for _ in range(count)]
+        self.last_generated_ids = [emp['id'] for emp in self.queue]
+        
+        self.is_running = True
+        self.btn_bulk.setEnabled(False)
+        self.btn_sequential.setEnabled(False)
+        self.btn_delete_last.setVisible(False)
+        self.log(f"Iniciando envio sequencial de {count} colaboradores...")
+        self.send_next_in_queue()
+
+    def send_next_in_queue(self):
+        if not self.queue:
+            self.log("Envio sequencial concluído.")
+            self.is_running = False
+            self.btn_bulk.setEnabled(True)
+            self.btn_sequential.setEnabled(True)
+            self.btn_delete_last.setVisible(True)
+            return
+            
+        emp = self.queue.pop(0)
+        command_str = f"01+EU+00+1+I[{emp['id']}[{emp['nome']}[0[1[{emp['matricula']}]"
+        
+        # Conectar sinal de recebimento para disparar o próximo
+        # Mas como a aba pode estar recebendo outras coisas, precisamos de um mecanismo
+        # No append_received chamaremos check_macro_sequential
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log(f"Enviando ({len(self.queue)} restantes): {emp['nome']}")
+
+    def on_delete_last_clicked(self):
+        if not self.last_generated_ids: return
+        
+        count = len(self.last_generated_ids)
+        # 01+EU+00+{Quantidade}+E[{ID}]E[{ID2}]...
+        parts = [f"E[{id_val}]" for id_val in self.last_generated_ids]
+        command_str = f"01+EU+00+{count}+" + "".join(parts)
+        
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log(f"Enviado comando de exclusão para os últimos {count} IDs gerados.")
+        self.btn_delete_last.setVisible(False)
+        self.last_generated_ids = []
+
+    def handle_response(self):
+        if self.is_running:
+            # Aguarda um pouco antes de enviar o próximo para não saturar
+            QTimer.singleShot(100, self.send_next_in_queue)
 
 
 class EvoRepProtocol:
@@ -634,6 +795,7 @@ class EvoRepAuthApp(QWidget):
                 "last_sent_bytes": "",
                 "last_received_text": "",
                 "last_received_bytes": "",
+                "reconnect_count": 0,
             }
         }
         
@@ -644,6 +806,9 @@ class EvoRepAuthApp(QWidget):
         self.manual_history = []
         self.history_index = -1
         self.last_manual_command = "01+RH+00"
+        
+        # 🔹 REQUISITO: Lista para manter referências de workers externos e evitar crash "Destroyed while thread is still running"
+        self.external_workers = []
         
         self.connect_timer = QTimer()
         self.connect_timer.timeout.connect(self.animate_connecting_button)
@@ -757,8 +922,15 @@ class EvoRepAuthApp(QWidget):
             self.main_connect_button = QPushButton("Conectar")
             self.main_connect_button.clicked.connect(self.on_connect_clicked)
             conn_layout.addWidget(self.main_connect_button, 5, 0, 1, 2)
+            
+            # 🔹 REQUISITO: Botão Macro (F1/F2)
+            macro_btn = QPushButton("Macro")
+            macro_btn.setVisible(False)
+            macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
+            conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
+            setattr(self, f"{prefix}macro_button", macro_btn)
 
-        conn_layout.setRowStretch(6, 1) 
+        conn_layout.setRowStretch(7, 1) 
         conn_widget.setLayout(conn_layout)
 
         # Painel de Comandos (ou Identificação no F3)
@@ -1328,13 +1500,47 @@ class EvoRepAuthApp(QWidget):
         else: state["last_sent_bytes"] = hex_text
         self.update_sent_received_output(prefix)
     
+    def on_macro_clicked(self, prefix):
+        if not hasattr(self, f"{prefix}macro_window"):
+            setattr(self, f"{prefix}macro_window", MacroWindow(self, prefix))
+        
+        window = getattr(self, f"{prefix}macro_window")
+        window.show()
+        window.raise_()
+
+    def send_external_command(self, command_str, prefix):
+        state = self.tab_data[prefix]
+        if not state["persistent_sock"]: return
+
+        # Usar um worker para enviar sem travar a UI
+        worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
+        
+        # 🔹 REQUISITO: Manter referência do worker para evitar garbage collection prematura (crash QThread)
+        self.external_workers.append(worker)
+        
+        worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+        worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
+        
+        # Limpar referência quando terminar
+        worker.finished_signal.connect(lambda: self.external_workers.remove(worker) if worker in self.external_workers else None)
+        
+        worker.start()
+
     def append_received(self, text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
         
+        # 🔹 REQUISITO: Se houver macro sequencial rodando, notificar a janela
+        if hasattr(self, f"{prefix}macro_window"):
+            window = getattr(self, f"{prefix}macro_window")
+            if window.is_running:
+                window.handle_response()
+
         # 🔹 Lógica especial para processar resposta RB na aba F3
         if prefix == "f3_":
             if text.startswith("01+RB+000+"):
+                # Resetar contador de reconexão ao receber uma resposta válida de identificação
+                state["reconnect_count"] = 0
                 try:
                     # Formato esperado: 01+RB+000+{CódigoDesbloqueio}]{numeroREP}
                     data_part = text[10:] # Pula o prefixo fixo
@@ -1359,6 +1565,16 @@ class EvoRepAuthApp(QWidget):
                 QMessageBox.information(self, "Desbloqueio F3", "Equipamento desbloqueado com sucesso!")
             elif text.startswith("01+EB+012"):
                 QMessageBox.warning(self, "Desbloqueio F3", "Código de Desbloqueio Inválido")
+            elif text == "00+00+015":
+                # 🔹 REQUISITO: Auto-reconexão no erro 015
+                if state["reconnect_count"] < 3:
+                    state["reconnect_count"] += 1
+                    self.append_log(f"F3: Erro 015 recebido. Tentativa de reconexão automática {state['reconnect_count']}/3...")
+                    # Pequeno delay para garantir que o socket seja fechado e reaberto corretamente
+                    QTimer.singleShot(500, self.on_connect_clicked) # Chama on_connect_clicked (que fará disconnect e connect)
+                else:
+                    self.append_log("F3: Erro 015 persistente após 3 tentativas. Reconexão automática interrompida.")
+                    state["reconnect_count"] = 0 # Reseta para permitir nova tentativa manual
 
         if state["last_received_text"]: state["last_received_text"] += "\n" + text
         else: state["last_received_text"] = text
@@ -1522,11 +1738,13 @@ class EvoRepAuthApp(QWidget):
             self.connect_timer.stop()
             self.main_connect_button.setText("Conectar")
             self.main_connect_button.setEnabled(True)
+            self.main_macro_button.setVisible(False)
         elif prefix == "client_":
             self.client_btn_server_control.setText("Iniciar Servidor")
             self.client_btn_server_control.setEnabled(True)
             self.client_btn_client_state.setText("Aguardando Conexão")
             self.client_btn_client_state.setEnabled(False)
+            self.client_macro_button.setVisible(False)
         elif prefix == "f3_":
             self.f3_connect_button.setText("Conectar")
             self.f3_connect_button.setEnabled(True)
@@ -1567,7 +1785,11 @@ class EvoRepAuthApp(QWidget):
 
             getattr(self, f"{prefix}send_button").setEnabled(True)
             self.set_inputs_enabled(False, prefix)
-            
+
+            # 🔹 REQUISITO: Exibir botão Macro se for F1 ou F2
+            if prefix in ["main_", "client_"]:
+                getattr(self, f"{prefix}macro_button").setVisible(True)
+
             state["listener_worker"] = ListenerWorker(state["persistent_sock"], state["session_key"])
             state["listener_worker"].received_signal.connect(lambda txt: self.append_received(txt, prefix))
             state["listener_worker"].received_bytes_signal.connect(lambda hex_txt: self.append_received_bytes(hex_txt, prefix))
