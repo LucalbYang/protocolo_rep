@@ -748,11 +748,11 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
-# Consolidated RR command for UI selection
+# Comando RR consolidado para a interface (adicionado no final do arquivo)
 registrar_comando(CommandDefinition(
     code="RR",
     description="Receber Registros: Selecione o tipo de filtro (Memória, NSR ou Data).",
-    template="01+RR+00", # Generic template, actual template built in main.py
+    template="01+RR+00", # O template real será substituído no main.py
     params=[
         CommandParam(
             name="Tipo",

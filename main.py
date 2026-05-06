@@ -175,6 +175,9 @@ class EvoRepCrypto:
 
     @staticmethod
     def decrypt_aes(key: bytes, ciphertext: bytes) -> str:
+        if not key: # Caso especial para F3 (sem criptografia)
+            return ciphertext.decode('utf-8', errors='ignore')
+
         if len(ciphertext) < 16 or len(ciphertext) % 16 != 0:
             return ciphertext.decode('utf-8', errors='ignore')
             
@@ -408,6 +411,49 @@ class ClientNetworkWorker(QThread):
                 except: pass
 
 
+class F3NetworkWorker(QThread):
+    log_signal = pyqtSignal(str)
+    # emitimos True/False, mensagem, o socket e None (sem session key)
+    finished_signal = pyqtSignal(bool, str, object, bytes)
+    auto_sent_signal = pyqtSignal(str, bytes) # Para enviar RB automaticamente
+
+    def __init__(self, ip: str, port: int, parent=None):
+        super().__init__(parent)
+        self.ip = ip
+        self.port = port
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def run(self):
+        sock = None
+        try:
+            self.log_signal.emit(f"F3: Tentando conectar a {self.ip}:{self.port} (Sem criptografia)...")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(5)
+            sock.connect((self.ip, self.port))
+
+            self.log_signal.emit("F3: Conectado. Enviando string automática...")
+            
+            # Enviar apenas 01+RB
+            rb_payload = "01+RB"
+            rb_packet = EvoRepProtocol.pack(rb_payload)
+            sock.sendall(rb_packet)
+            self.auto_sent_signal.emit(rb_payload, rb_packet)
+
+            self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"")
+
+        except Exception as e:
+            if self.running:
+                self.log_signal.emit(f"F3: Falha na conexão: {e}")
+                self.finished_signal.emit(False, str(e), None, b"")
+            if sock:
+                try: sock.close()
+                except: pass
+
+
 class CommandWorker(QThread):
     sent_signal = pyqtSignal(str)
     sent_bytes_signal = pyqtSignal(str)
@@ -421,9 +467,13 @@ class CommandWorker(QThread):
 
     def run(self):
         try:
-            # Apenas envia o comando. A resposta será capturada pelo ListenerWorker.
-            encrypted_command = EvoRepCrypto.encrypt_aes(self.session_key, self.command)
-            packet = EvoRepProtocol.pack(encrypted_command)
+            if self.session_key:
+                # Com criptografia (Aba F1/F2)
+                encrypted_command = EvoRepCrypto.encrypt_aes(self.session_key, self.command)
+                packet = EvoRepProtocol.pack(encrypted_command)
+            else:
+                # Sem criptografia (Aba F3)
+                packet = EvoRepProtocol.pack(self.command)
             
             self.sent_signal.emit(self.command)
             self.sent_bytes_signal.emit(packet.hex(' '))
@@ -458,8 +508,12 @@ class ListenerWorker(QThread):
                     continue
                 
                 # Desempacota e descriptografa o que chegou
-                payload_encrypted = EvoRepProtocol.unpack(data)
-                payload = EvoRepCrypto.decrypt_aes(self.session_key, payload_encrypted)
+                payload_raw = EvoRepProtocol.unpack(data)
+                
+                if self.session_key:
+                    payload = EvoRepCrypto.decrypt_aes(self.session_key, payload_raw)
+                else:
+                    payload = payload_raw.decode('utf-8', errors='ignore')
                 
                 self.received_signal.emit(payload)
                 self.received_bytes_signal.emit(data.hex(' '))
@@ -569,6 +623,17 @@ class EvoRepAuthApp(QWidget):
                 "last_sent_bytes": "",
                 "last_received_text": "",
                 "last_received_bytes": "",
+            },
+            "f3_": {
+                "persistent_sock": None,
+                "session_key": None, # F3 não usa criptografia
+                "connected": False,
+                "worker": None,
+                "listener_worker": None,
+                "last_sent_text": "",
+                "last_sent_bytes": "",
+                "last_received_text": "",
+                "last_received_bytes": "",
             }
         }
         
@@ -601,6 +666,7 @@ class EvoRepAuthApp(QWidget):
         # Garantir fechamento de todos os sockets ativos
         self.disconnect("main_")
         self.disconnect("client_")
+        self.disconnect("f3_")
         
         # Salva posição e tamanho da janela
         self.settings.setValue("geometry", self.saveGeometry())
@@ -613,15 +679,18 @@ class EvoRepAuthApp(QWidget):
         self.stacked_widget = QStackedWidget(self)
 
         # Aba Principal (F1)
-        self.main_tab = self._create_rep_tab(is_client_mode=False)
+        self.main_tab = self._create_rep_tab(prefix="main_")
         # Aba de Log (F7)
         self.log_tab = self._create_log_tab()
         # Aba Modo Cliente (F2)
-        self.client_tab = self._create_rep_tab(is_client_mode=True)
+        self.client_tab = self._create_rep_tab(prefix="client_")
+        # Aba F3 (Sem criptografia)
+        self.f3_tab = self._create_rep_tab(prefix="f3_")
 
         self.stacked_widget.addWidget(self.main_tab)   # Index 0
         self.stacked_widget.addWidget(self.log_tab)    # Index 1
         self.stacked_widget.addWidget(self.client_tab) # Index 2
+        self.stacked_widget.addWidget(self.f3_tab)     # Index 3
 
         root_layout = QVBoxLayout()
         root_layout.addWidget(self.stacked_widget)
@@ -630,7 +699,10 @@ class EvoRepAuthApp(QWidget):
         self.setMinimumSize(850, 600)
         self.resize(850, 600)
 
-    def _create_rep_tab(self, is_client_mode=False):
+    def _create_rep_tab(self, prefix="main_"):
+        is_client_mode = (prefix == "client_")
+        is_f3 = (prefix == "f3_")
+        
         tab = QWidget()
         layout = QVBoxLayout()
 
@@ -653,15 +725,16 @@ class EvoRepAuthApp(QWidget):
         port_input = QLineEdit("3000")
         conn_layout.addWidget(port_input, 2, 1)
 
-        conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
-        user_input = QLineEdit("teste fabrica")
-        conn_layout.addWidget(user_input, 3, 1)
+        if not is_f3:
+            conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
+            user_input = QLineEdit("teste fabrica")
+            conn_layout.addWidget(user_input, 3, 1)
 
-        conn_layout.addWidget(QLabel("Senha:"), 4, 0)
-        password_input = QLineEdit("111111")
-        password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        password_input.setMaxLength(6)
-        conn_layout.addWidget(password_input, 4, 1)
+            conn_layout.addWidget(QLabel("Senha:"), 4, 0)
+            password_input = QLineEdit("111111")
+            password_input.setEchoMode(QLineEdit.EchoMode.Password)
+            password_input.setMaxLength(6)
+            conn_layout.addWidget(password_input, 4, 1)
 
         # 🔹 REQUISITO 2: Refatoração dos Botões da Aba F2 (Modo Cliente)
         if is_client_mode:
@@ -676,9 +749,10 @@ class EvoRepAuthApp(QWidget):
             
             self.client_btn_server_control.clicked.connect(self.on_connect_clicked)
             self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
-            
-            # Alias para manter compatibilidade com lógica existente
-            self.client_connect_button = self.client_btn_server_control 
+        elif is_f3:
+            self.f3_connect_button = QPushButton("Conectar")
+            self.f3_connect_button.clicked.connect(self.on_connect_clicked)
+            conn_layout.addWidget(self.f3_connect_button, 5, 0, 1, 2)
         else:
             self.main_connect_button = QPushButton("Conectar")
             self.main_connect_button.clicked.connect(self.on_connect_clicked)
@@ -687,38 +761,73 @@ class EvoRepAuthApp(QWidget):
         conn_layout.setRowStretch(6, 1) 
         conn_widget.setLayout(conn_layout)
 
-        # Painel de Comandos
-        cmds_group = QGroupBox("Construção de Comandos")
-        cmds_group_layout = QVBoxLayout(cmds_group)
+        # Painel de Comandos (ou Identificação no F3)
+        if is_f3:
+            cmds_group = QGroupBox("Identificação do Equipamento")
+            cmds_group_layout = QFormLayout(cmds_group)
+            
+            self.f3_rep_num_field = QLineEdit()
+            self.f3_rep_num_field.setReadOnly(True)
+            self.f3_rep_num_field.setPlaceholderText("Aguardando conexão...")
+            
+            self.f3_unlock_code_field = QLineEdit()
+            self.f3_unlock_code_field.setReadOnly(True)
+            self.f3_unlock_code_field.setPlaceholderText("Aguardando conexão...")
+            
+            cmds_group_layout.addRow("Número do REP:", self.f3_rep_num_field)
+            cmds_group_layout.addRow("Código de Bloqueio:", self.f3_unlock_code_field)
 
-        combo_layout = QHBoxLayout()
-        combo_layout.addWidget(QLabel("Selecionar:"))
-        
-        # 🔹 REQUISITO 1: Uso da NoScrollComboBox
-        command_combo = NoScrollComboBox()
-        command_combo.addItem("Modo Manual / Custom", None)
-        for code, cmd_def in COMMANDS_REGISTRY.items():
-            resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
-            command_combo.addItem(f"{code} - {resumo}", code)
-        combo_layout.addWidget(command_combo)
-        cmds_group_layout.addLayout(combo_layout)
+            cmds_group_layout.addRow(QLabel("")) # Spacer para separar
+            cmds_group_layout.addRow(QLabel("Código de Desbloqueio:"))
+            self.f3_unlock_input_field = QLineEdit()
+            self.f3_unlock_input_field.setPlaceholderText("Cole ou digite o código de desbloqueio aqui")
+            cmds_group_layout.addRow(self.f3_unlock_input_field)
 
-        cmd_description_label = QLabel("")
-        cmd_description_label.setWordWrap(True)
-        cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
-        cmds_group_layout.addWidget(cmd_description_label)
+            self.f3_unlock_button = QPushButton("Desbloquear")
+            self.f3_unlock_button.setEnabled(False) # Desabilitado até conectar
+            cmds_group_layout.addRow(self.f3_unlock_button)
+            
+            # Adiciona um widget invisível para manter as referências esperadas por outras funções
+            command_combo = NoScrollComboBox()
+            command_combo.setVisible(False)
+            dynamic_layout = QFormLayout()
+            send_button = QPushButton() # Este será o send_button para F3
+            send_button.setVisible(False)
+            cmd_description_label = QLabel()
+            cmd_description_label.setVisible(False)
+        else:
+            cmds_group = QGroupBox("Construção de Comandos")
+            cmds_group_layout = QVBoxLayout(cmds_group)
 
-        params_scroll = QScrollArea()
-        params_scroll.setWidgetResizable(True)
-        params_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        dynamic_params_widget = QWidget()
-        dynamic_layout = QFormLayout(dynamic_params_widget)
-        params_scroll.setWidget(dynamic_params_widget)
-        cmds_group_layout.addWidget(params_scroll)
-        
-        send_button = QPushButton("Enviar comando")
-        send_button.setEnabled(False)
-        cmds_group_layout.addWidget(send_button)
+
+            combo_layout = QHBoxLayout()
+            combo_layout.addWidget(QLabel("Selecionar:"))
+            
+            command_combo = NoScrollComboBox()
+            command_combo.addItem("Modo Manual / Custom", None)
+            for code, cmd_def in COMMANDS_REGISTRY.items():
+                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA"]: continue
+                resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
+                command_combo.addItem(f"{code} - {resumo}", code)
+            combo_layout.addWidget(command_combo)
+            cmds_group_layout.addLayout(combo_layout)
+
+            cmd_description_label = QLabel("")
+            cmd_description_label.setWordWrap(True)
+            cmd_description_label.setStyleSheet("color: #666; font-style: italic;")
+            cmds_group_layout.addWidget(cmd_description_label)
+
+            params_scroll = QScrollArea()
+            params_scroll.setWidgetResizable(True)
+            params_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            dynamic_params_widget = QWidget()
+            dynamic_layout = QFormLayout(dynamic_params_widget)
+            params_scroll.setWidget(dynamic_params_widget)
+            cmds_group_layout.addWidget(params_scroll)
+            
+            send_button = QPushButton("Enviar comando")
+            send_button.setEnabled(False)
+            cmds_group_layout.addWidget(send_button)
 
         top_layout.addWidget(conn_widget, 1)
         top_layout.addWidget(cmds_group, 3)
@@ -752,12 +861,16 @@ class EvoRepAuthApp(QWidget):
 
         tab.setLayout(layout)
 
-        # Armazenar referências para uso posterior
-        prefix = "client_" if is_client_mode else "main_"
+        # Armazenar referências
         setattr(self, f"{prefix}ip_input", ip_input)
         setattr(self, f"{prefix}port_input", port_input)
-        setattr(self, f"{prefix}user_input", user_input)
-        setattr(self, f"{prefix}password_input", password_input)
+        if not is_f3:
+            setattr(self, f"{prefix}user_input", user_input)
+            setattr(self, f"{prefix}password_input", password_input)
+            password_input.textChanged.connect(self.validate_password_input)
+            password_input.returnPressed.connect(self.on_enter_pressed)
+            user_input.returnPressed.connect(self.on_enter_pressed)
+
         setattr(self, f"{prefix}command_combo", command_combo)
         setattr(self, f"{prefix}dynamic_layout", dynamic_layout)
         setattr(self, f"{prefix}send_button", send_button)
@@ -767,16 +880,20 @@ class EvoRepAuthApp(QWidget):
         setattr(self, f"{prefix}toggle_mode_button", toggle_mode_button)
         setattr(self, f"{prefix}cmd_description_label", cmd_description_label)
 
-        # Conectar sinais
+        # Conectar sinais comuns
         ip_input.returnPressed.connect(self.on_enter_pressed)
         port_input.returnPressed.connect(self.on_enter_pressed)
-        user_input.returnPressed.connect(self.on_enter_pressed)
-        password_input.returnPressed.connect(self.on_enter_pressed)
-        password_input.textChanged.connect(self.validate_password_input)
         command_combo.currentIndexChanged.connect(self.on_command_selected)
         send_button.clicked.connect(self.on_send_command_clicked)
         clear_button.clicked.connect(self.on_clear_clicked)
         toggle_mode_button.clicked.connect(self.on_toggle_display_mode)
+
+        if is_f3:
+            self.f3_unlock_button.clicked.connect(self.on_f3_unlock_clicked)
+            self.f3_unlock_input_field.returnPressed.connect(self.on_f3_unlock_clicked)
+            # Habilitar/desabilitar o botão de desbloqueio com base na conexão
+            self.f3_connect_button.clicked.connect(lambda: self.f3_unlock_button.setEnabled(self.tab_data["f3_"]["connected"]))
+
 
         return tab
 
@@ -791,9 +908,10 @@ class EvoRepAuthApp(QWidget):
 
     def _get_active_prefix(self):
         idx = self.stacked_widget.currentIndex()
-        if idx == 2:
-            return "client_"
-        return "main_"
+        if idx == 0: return "main_"
+        if idx == 2: return "client_"
+        if idx == 3: return "f3_"
+        return "main_" # Fallback
 
     def _get_widget(self, name):
         prefix = self._get_active_prefix()
@@ -839,16 +957,16 @@ class EvoRepAuthApp(QWidget):
                         self.param_inputs[param.name] = checkboxes
                         continue
                     else:
-                        # 🔹 REQUISITO 1: Uso da NoScrollComboBox em inputs dinâmicos
                         input_field = NoScrollComboBox()
                         for choice in param.choices:
                             input_field.addItem(choice['label'], choice['value'])
                         dynamic_layout.addRow(label_text, input_field)
                         self.param_inputs[param.name] = input_field
                         
-                        # Lógica especial para o comando EC
                         if cmd_code == "EC" and param.name == "Configuração":
                             input_field.currentIndexChanged.connect(self.update_ec_valor_field)
+                        elif cmd_code == "RR" and param.name == "Tipo":
+                            input_field.currentIndexChanged.connect(self.update_rr_fields)
                         continue
                 else:
                     input_field = QLineEdit(str(param.default))
@@ -885,9 +1003,10 @@ class EvoRepAuthApp(QWidget):
             if pending_data_field is not None:
                 dynamic_layout.addRow(pending_data_label, pending_data_field)
             
-            # Inicializa o campo Valor do EC se necessário
             if cmd_code == "EC":
                 self.update_ec_valor_field()
+            elif cmd_code == "RR":
+                self.update_rr_fields()
 
     def update_ec_valor_field(self):
         """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
@@ -911,7 +1030,6 @@ class EvoRepAuthApp(QWidget):
                 new_input.addItem(c['label'], c['value'])
         else:
             new_input = QLineEdit()
-            # Dicas de placeholder
             if config_key == "LOGIN": new_input.setPlaceholderText("Máx 16 caracteres")
             elif config_key == "SENHA_MENU": new_input.setPlaceholderText("6 dígitos")
             elif config_key == "MENSAGEM": new_input.setPlaceholderText("Máx 20 caracteres")
@@ -919,18 +1037,74 @@ class EvoRepAuthApp(QWidget):
             elif config_key == "TAM_BOB": new_input.setPlaceholderText("0 ~ 400")
             elif config_key == "TEMPO_LIB": new_input.setPlaceholderText("0 ~ 60")
             elif config_key == "NTP_TIMEOUT": new_input.setPlaceholderText("1 ~ 99")
-            elif "PORT" in config_key:
-                new_input.setPlaceholderText("1000 ~ 65535")
-            elif any(x in config_key for x in ["IP", "DNS", "GATEWAY", "SERVER"]):
+            elif any(x in config_key for x in ["IP", "DNS", "GATEWAY", "SERVER_IP"]):
                 new_input.setPlaceholderText("Ex: 192.168.1.100")
-            elif "MAC" in config_key:
-                new_input.setPlaceholderText("Ex: 00:11:22:33:44:55")
+            elif "PORTA" in config_key or "SERVER_PORT" in config_key:
+                new_input.setPlaceholderText("1000 ~ 65535")
         
         if hasattr(new_input, "returnPressed"):
             new_input.returnPressed.connect(self.on_enter_pressed)
             
         dynamic_layout.addRow("Valor:", new_input)
         self.param_inputs["Valor"] = new_input
+
+    def update_rr_fields(self):
+        """Atualiza os campos secundários do comando RR com base no 'Tipo' selecionado."""
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        tipo_combo = self.param_inputs.get("Tipo")
+        if not tipo_combo: return
+        
+        sub_cmd_code = tipo_combo.currentData()
+        sub_cmd_def = COMMANDS_REGISTRY.get(sub_cmd_code)
+        
+        while dynamic_layout.rowCount() > 1:
+            dynamic_layout.removeRow(1)
+            
+        keys_to_remove = [k for k in self.param_inputs.keys() if k not in ["Tipo", "_manual"]]
+        for k in keys_to_remove:
+            del self.param_inputs[k]
+            
+        if not sub_cmd_def: return
+        
+        pending_data_field = None
+        pending_data_label = None
+        
+        for param in sub_cmd_def.params:
+            label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
+            input_field = QLineEdit(str(param.default))
+            input_field.setPlaceholderText(param.description)
+            input_field.returnPressed.connect(self.on_enter_pressed)
+
+            if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
+                input_field.setInputMask("99/99/99;_")
+                input_field.setText(time.strftime("%d/%m/%y"))
+            elif param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower():
+                input_field.setInputMask("99:99:99;_")
+                input_field.setText(time.strftime("%H:%M:%S"))
+
+            if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
+                pending_data_field = input_field
+                pending_data_label = label_text
+                self.param_inputs[param.name] = input_field
+                continue
+            elif (param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower()) and pending_data_field is not None:
+                hbox = QHBoxLayout()
+                hbox.setContentsMargins(0, 0, 0, 0)
+                hbox.addWidget(pending_data_field)
+                label_hora = QLabel(label_text)
+                hbox.addWidget(label_hora)
+                hbox.addWidget(input_field)
+                dynamic_layout.addRow(pending_data_label, hbox)
+                self.param_inputs[param.name] = input_field
+                pending_data_field = None
+                continue
+
+            dynamic_layout.addRow(label_text, input_field)
+            self.param_inputs[param.name] = input_field
+
+        if pending_data_field is not None:
+            dynamic_layout.addRow(pending_data_label, pending_data_field)
 
     def eventFilter(self, source, event):
         if source == getattr(self, "manual_input", None) and event.type() == QEvent.Type.KeyPress:
@@ -977,6 +1151,9 @@ class EvoRepAuthApp(QWidget):
                     self.manual_history.pop(0)
             self.history_index = -1
         else:
+            if cmd_code == "RR":
+                cmd_code = self.param_inputs["Tipo"].currentData()
+                
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             kwargs = {}
             for param_name, input_field in self.param_inputs.items():
@@ -1015,6 +1192,9 @@ class EvoRepAuthApp(QWidget):
         elif event.key() == Qt.Key.Key_F2:
             self.stacked_widget.setCurrentIndex(2)
             self.on_command_selected(0)
+        elif event.key() == Qt.Key.Key_F3:
+            self.stacked_widget.setCurrentIndex(3)
+            self.on_command_selected(0)
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.on_enter_pressed()
         else:
@@ -1036,9 +1216,17 @@ class EvoRepAuthApp(QWidget):
             elif self.client_btn_client_state.text() == "Desconectar":
                 if self.client_send_button.isEnabled():
                     self.on_send_command_clicked()
+        elif prefix == "f3_":
+            if self.f3_connect_button.text() == "Conectar":
+                if self.f3_connect_button.isEnabled():
+                    self.on_connect_clicked()
+            elif self.f3_connect_button.text() == "Desconectar":
+                if self.f3_send_button.isEnabled():
+                    self.on_send_command_clicked()
 
     def validate_password_input(self):
         prefix = self._get_active_prefix()
+        if prefix == "f3_": return
         state = self.tab_data[prefix]
         password_input = self._get_widget("password_input")
         password = password_input.text()
@@ -1047,21 +1235,20 @@ class EvoRepAuthApp(QWidget):
             is_valid = len(password) == 6 and password.isdigit()
             if prefix == "main_":
                 self.main_connect_button.setEnabled(is_valid if password else False)
-            else:
+            elif prefix == "client_":
                 self.client_btn_server_control.setEnabled(is_valid if password else False)
 
     def set_inputs_enabled(self, enabled: bool, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         getattr(self, f"{prefix}ip_input").setEnabled(enabled)
         getattr(self, f"{prefix}port_input").setEnabled(enabled)
-        getattr(self, f"{prefix}user_input").setEnabled(enabled)
-        getattr(self, f"{prefix}password_input").setEnabled(enabled)
+        if prefix != "f3_":
+            getattr(self, f"{prefix}user_input").setEnabled(enabled)
+            getattr(self, f"{prefix}password_input").setEnabled(enabled)
 
     def load_config(self):
-        # Restaurar geometria da janela (posição e tamanho)
         geom = self.settings.value("geometry")
-        if geom:
-            self.restoreGeometry(geom)
+        if geom: self.restoreGeometry(geom)
 
         self.main_ip_input.setText(self.settings.value('ip', '192.168.60.83'))
         self.main_port_input.setText(str(self.settings.value('port', 3000)))
@@ -1072,34 +1259,38 @@ class EvoRepAuthApp(QWidget):
         self.client_port_input.setText(str(self.settings.value('client_port', 3000)))
         self.client_user_input.setText(self.settings.value('user', 'teste fabrica'))
         self.client_password_input.setText(self.settings.value('password', '111111'))
+
+        self.f3_ip_input.setText(self.settings.value('f3_ip', '192.168.60.83'))
+        self.f3_port_input.setText(str(self.settings.value('f3_port', 3000)))
         
         saved_history = self.settings.value('manual_history', [])
         if isinstance(saved_history, list): self.manual_history = saved_history
         self.last_manual_command = self.settings.value('last_manual_command', '01+RH+00')
         
-        # Restaurar a última aba ativa
         active_tab = self.settings.value("active_tab", 0)
         self.stacked_widget.setCurrentIndex(int(active_tab))
         
         self.validate_password_input()
-        # Atualiza os campos do comando para a aba que foi restaurada
         self.on_command_selected(0)
 
     def save_config(self):
         prefix = self._get_active_prefix()
         ip_input = getattr(self, f"{prefix}ip_input")
         port_input = getattr(self, f"{prefix}port_input")
-        user_input = getattr(self, f"{prefix}user_input")
-        password_input = getattr(self, f"{prefix}password_input")
 
         if prefix == "main_":
             self.settings.setValue('ip', ip_input.text())
             self.settings.setValue('port', port_input.text())
-        else:
+        elif prefix == "client_":
             self.settings.setValue('client_port', port_input.text())
+        elif prefix == "f3_":
+            self.settings.setValue('f3_ip', ip_input.text())
+            self.settings.setValue('f3_port', port_input.text())
             
-        self.settings.setValue('user', user_input.text())
-        self.settings.setValue('password', password_input.text())
+        if prefix != "f3_":
+            self.settings.setValue('user', getattr(self, f"{prefix}user_input").text())
+            self.settings.setValue('password', getattr(self, f"{prefix}password_input").text())
+            
         self.settings.setValue('manual_history', self.manual_history)
         self.settings.setValue('last_manual_command', self.last_manual_command)
         self.settings.sync() 
@@ -1140,6 +1331,35 @@ class EvoRepAuthApp(QWidget):
     def append_received(self, text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
+        
+        # 🔹 Lógica especial para processar resposta RB na aba F3
+        if prefix == "f3_":
+            if text.startswith("01+RB+000+"):
+                try:
+                    # Formato esperado: 01+RB+000+{CódigoDesbloqueio}]{numeroREP}
+                    data_part = text[10:] # Pula o prefixo fixo
+                    if "]" in data_part:
+                        unlock_code, rep_num = data_part.split("]", 1)
+                        unlock_code = unlock_code.strip()
+                        rep_num = rep_num.strip()
+                        
+                        self.f3_unlock_code_field.setText(unlock_code)
+                        self.f3_rep_num_field.setText(rep_num)
+                        
+                        # Salva nas variáveis de estado também
+                        state["unlock_code"] = unlock_code
+                        state["rep_num"] = rep_num
+
+                        # 🔹 REQUISITO: Se o código de desbloqueio estiver vazio, o equipamento já está desbloqueado
+                        if not unlock_code:
+                            QMessageBox.information(self, "Conexão F3", "Equipamento já desbloqueado")
+                except Exception as e:
+                    self.append_log(f"F3: Erro ao processar dados de identificação: {e}")
+            elif text.startswith("01+EB+000"):
+                QMessageBox.information(self, "Desbloqueio F3", "Equipamento desbloqueado com sucesso!")
+            elif text.startswith("01+EB+012"):
+                QMessageBox.warning(self, "Desbloqueio F3", "Código de Desbloqueio Inválido")
+
         if state["last_received_text"]: state["last_received_text"] += "\n" + text
         else: state["last_received_text"] = text
         self.update_sent_received_output(prefix)
@@ -1156,11 +1376,12 @@ class EvoRepAuthApp(QWidget):
         btn_text = "Exibir em string" if self.show_bytes else "Exibir em bytes"
         self.main_toggle_mode_button.setText(btn_text)
         self.client_toggle_mode_button.setText(btn_text)
+        self.f3_toggle_mode_button.setText(btn_text)
         self.update_sent_received_output("main_")
         self.update_sent_received_output("client_")
+        self.update_sent_received_output("f3_")
 
     def animate_connecting_button(self):
-        # 🔹 REQUISITO 2: Timer afeta apenas a aba F1
         self.dot_count = (self.dot_count + 1) % 4
         dots = "." * self.dot_count
         self.main_connect_button.setText(f"Conectando{dots}")
@@ -1169,8 +1390,6 @@ class EvoRepAuthApp(QWidget):
         self.append_log(message)
         prefix = self._get_active_prefix()
         getattr(self, f"{prefix}send_button").setEnabled(True)
-        if not success:
-            self.append_log(f"Falha no comando ({prefix}): Verifique a conexão.")
 
     def on_clear_clicked(self):
         prefix = self._get_active_prefix()
@@ -1182,28 +1401,30 @@ class EvoRepAuthApp(QWidget):
         self.update_sent_received_output(prefix)
         self.append_log(f"Campos da aba {prefix} limpos.")
 
-    # 🔹 REQUISITO 2: Refatoração da Lógica de Conexão (F1 vs F2)
     def on_connect_clicked(self):
         prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
         
-        # Lógica de Desconexão (Compartilhada)
         if state["connected"]:
             self.disconnect(prefix)
             return
 
-        # Para Aba Cliente, se o worker estiver rodando (servidor ativo mas sem cliente), desliga
         if prefix == "client_" and state["worker"] and state["worker"].isRunning():
             self.disconnect(prefix)
             return
 
         ip = getattr(self, f"{prefix}ip_input").text().strip()
         port_text = getattr(self, f"{prefix}port_input").text().strip()
-        user = getattr(self, f"{prefix}user_input").text().strip()
-        password = getattr(self, f"{prefix}password_input").text().strip()
 
-        if not ip or not port_text or not user or not password:
-            self.append_log("Preencha todos os campos antes de conectar.")
+        if prefix != "f3_":
+            user = getattr(self, f"{prefix}user_input").text().strip()
+            password = getattr(self, f"{prefix}password_input").text().strip()
+            if not user or not password:
+                self.append_log("Preencha usuário e senha.")
+                return
+
+        if not ip or not port_text:
+            self.append_log("Preencha IP e Porta.")
             return
 
         try: port = int(port_text)
@@ -1218,45 +1439,77 @@ class EvoRepAuthApp(QWidget):
             self.main_connect_button.setEnabled(False)
             self.connect_timer.start(350) 
             state["worker"] = NetworkWorker(ip, port, user, password)
-        else:
-            # 🔹 REQUISITO 2: Interface F2 ignora timer/animacao
+        elif prefix == "client_":
             self.client_btn_server_control.setText("Desligar Servidor")
             self.client_btn_client_state.setText("Aguardando Conexão")
             self.client_btn_client_state.setEnabled(False)
             state["worker"] = ClientNetworkWorker(ip, port, user, password)
+        elif prefix == "f3_":
+            self.f3_connect_button.setEnabled(False)
+            state["worker"] = F3NetworkWorker(ip, port)
+            state["worker"].auto_sent_signal.connect(lambda txt, bts: self.on_f3_auto_sent(txt, bts))
             
         state["worker"].log_signal.connect(self.append_log)
         state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
         state["worker"].start()
 
+    def on_f3_auto_sent(self, text, packet_bytes):
+        self.append_sent(text, "f3_")
+        self.append_sent_bytes(packet_bytes.hex(' '), "f3_")
+
+    def on_f3_unlock_clicked(self):
+        prefix = "f3_"
+        state = self.tab_data[prefix]
+
+        if not state["connected"]:
+            self.append_log("F3: Erro: Não conectado para enviar comando de desbloqueio.")
+            return
+
+        unlock_code = self.f3_unlock_input_field.text().strip()
+        if not unlock_code:
+            QMessageBox.warning(self, "Desbloqueio F3", "Por favor, insira o Código de Bloqueio.")
+            return
+        
+        # Formato: 01+EB+00+{CódigoDesbloqueio}
+        command_str = f"01+EB+00+{unlock_code}"
+        self.append_log(f"F3: Enviando comando de desbloqueio: {command_str}")
+
+        self.f3_unlock_button.setEnabled(False) # Desabilita o botão para evitar múltiplos cliques
+        # Garantir que session_key seja None para F3 (sem criptografia)
+        self.command_worker = CommandWorker(state["persistent_sock"], command_str, None)
+        self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+        self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
+        self.command_worker.finished_signal.connect(self.on_f3_unlock_command_finished)
+        self.command_worker.start()
+
+    def on_f3_unlock_command_finished(self, success: bool, message: str):
+        self.append_log(f"F3 Desbloqueio: {message}")
+        self.f3_unlock_button.setEnabled(True) # Reabilita o botão
+        if not success:
+            QMessageBox.critical(self, "Erro Desbloqueio F3", "Falha ao enviar comando de desbloqueio.")
+
     def disconnect(self, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
 
-        # 1. Parar o ListenerWorker primeiro (ele usa o persistent_sock)
         if state["listener_worker"]:
             state["listener_worker"].stop()
-            # O shutdown do socket abaixo fará o recv() do listener retornar imediatamente
             if state["persistent_sock"]:
                 try: state["persistent_sock"].shutdown(socket.SHUT_RDWR)
                 except: pass
             state["listener_worker"].wait(500)
             state["listener_worker"] = None
 
-        # 2. Parar Workers de conexão (NetworkWorker / ClientNetworkWorker)
         if state["worker"]:
-            if hasattr(state["worker"], "stop"):
-                state["worker"].stop()
+            if hasattr(state["worker"], "stop"): state["worker"].stop()
             state["worker"].quit()
             if not state["worker"].wait(1000):
                 state["worker"].terminate()
                 state["worker"].wait()
             state["worker"] = None
 
-        # 3. Fechar o Socket Persistente com LINGER para liberação imediata
         if state["persistent_sock"]:
             try:
-                # l_onoff=1, l_linger=0 faz um close abortivo (RST), evitando TIME_WAIT
                 state["persistent_sock"].setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, bytes([1,0,0,0,0,0,0,0]))
                 state["persistent_sock"].close()
             except: pass
@@ -1265,16 +1518,19 @@ class EvoRepAuthApp(QWidget):
         state["session_key"] = None
         state["connected"] = False
         
-        # 🔹 REQUISITO 2: Reset dos botões específicos da aba
         if prefix == "main_":
             self.connect_timer.stop()
             self.main_connect_button.setText("Conectar")
             self.main_connect_button.setEnabled(True)
-        else:
+        elif prefix == "client_":
             self.client_btn_server_control.setText("Iniciar Servidor")
             self.client_btn_server_control.setEnabled(True)
             self.client_btn_client_state.setText("Aguardando Conexão")
             self.client_btn_client_state.setEnabled(False)
+        elif prefix == "f3_":
+            self.f3_connect_button.setText("Conectar")
+            self.f3_connect_button.setEnabled(True)
+            self.f3_unlock_button.setEnabled(False)
 
         getattr(self, f"{prefix}send_button").setEnabled(False)
         self.set_inputs_enabled(True, prefix)
@@ -1284,7 +1540,6 @@ class EvoRepAuthApp(QWidget):
         self.append_log(f"Erro na escuta ({prefix}): {error_msg}")
         self.disconnect(prefix)
 
-    # 🔹 REQUISITO 2: Refatoração do on_finished para botões independentes
     def on_finished(self, success: bool, message: str, sock, session_key, prefix):
         if prefix == "main_":
             self.connect_timer.stop()
@@ -1301,10 +1556,14 @@ class EvoRepAuthApp(QWidget):
             if prefix == "main_":
                 self.main_connect_button.setText("Desconectar")
                 self.main_connect_button.setEnabled(True)
-            else:
+            elif prefix == "client_":
                 self.client_btn_client_state.setText("Desconectar")
                 self.client_btn_client_state.setEnabled(True)
                 self.client_btn_server_control.setText("Desligar Servidor")
+            elif prefix == "f3_":
+                self.f3_connect_button.setText("Desconectar")
+                self.f3_connect_button.setEnabled(True)
+                self.f3_unlock_button.setEnabled(True)
 
             getattr(self, f"{prefix}send_button").setEnabled(True)
             self.set_inputs_enabled(False, prefix)
@@ -1315,24 +1574,26 @@ class EvoRepAuthApp(QWidget):
             state["listener_worker"].error_signal.connect(lambda err: self.on_listener_error(err, prefix))
             state["listener_worker"].start()
             
-            QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
+            if prefix != "f3_":
+                QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
         else:
             state["connected"] = False
             if prefix == "main_":
                 self.main_connect_button.setText("Conectar")
                 self.main_connect_button.setEnabled(True)
-            else:
+            elif prefix == "client_":
                 self.client_btn_server_control.setText("Iniciar Servidor")
                 self.client_btn_client_state.setText("Aguardando Conexão")
                 self.client_btn_client_state.setEnabled(False)
+            elif prefix == "f3_":
+                self.f3_connect_button.setText("Conectar")
+                self.f3_connect_button.setEnabled(True)
 
             getattr(self, f"{prefix}send_button").setEnabled(False)
             self.set_inputs_enabled(True, prefix)
             
-            # Tradução amigável para erro de soquete em uso (WinError 10013 ou 10048)
             if "10013" in message or "10048" in message:
                 message = "Soquete em uso por outra aplicação"
-                
             QMessageBox.critical(self, "Erro de Conexão", message)
 
 
