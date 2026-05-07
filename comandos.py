@@ -220,8 +220,8 @@ registrar_comando(CommandDefinition(
             description="Selecione a configuração a ser alterada",
             required=True,
             choices=[
-                {"label": "LOGIN - Nome do usuário (16 caracteres)", "value": "LOGIN"},
-                {"label": "SENHA_MENU - Senha numérica (6 dígitos)", "value": "SENHA_MENU"},
+                {"label": "LOGIN - Nome do usuário - Max 16 caracteres (Apenas ADM)", "value": "LOGIN"},
+                {"label": "SENHA_MENU - Senha numérica - 6 dígitos(Apenas ADM)", "value": "SENHA_MENU"},
                 {"label": "LEITOR_VER_DIG - Solicitar biometria: H (Habilitado) / D (Desabilitado)", "value": "LEITOR_VER_DIG"},
                 {"label": "TAM_BOB - Comprimento da bobina (0 ~ 400)", "value": "TAM_BOB"},
                 {"label": "EVENTO_ON - Enviar eventos online: H (Habilitado) / D (Desabilitado)", "value": "EVENTO_ON"},
@@ -748,7 +748,80 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
-# Comando RR consolidado para a interface (adicionado no final do arquivo)
+# Internal RU commands - not directly exposed in main dropdown
+registrar_comando(CommandDefinition(
+    code="RU_QUANTIDADE",
+    description="Receber Colaboradores (Por Quantidade): Solicita dados de colaboradores a partir de um índice.",
+    template="01+RU+00+{Quantidade}]{Índice}",
+    params=[
+        CommandParam(
+            name="Quantidade",
+            type=int,
+            default=10,
+            required=True,
+            description="Quantidade de colaboradores"
+        ),
+        CommandParam(
+            name="Índice",
+            type=int,
+            default=0,
+            required=True,
+            description="Índice inicial (0 para o primeiro)"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RU_MATRICULA",
+    description="Receber Colaboradores (Por Matrícula): Solicita dados de um colaborador pela matrícula.",
+    template="01+RU+00+-1]{Matrícula}",
+    params=[
+        CommandParam(
+            name="Matrícula",
+            type=str,
+            default="",
+            required=True,
+            description="Matrícula do colaborador"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RU_CPF",
+    description="Receber Colaboradores (Por CPF): Solicita dados de um colaborador pelo CPF.",
+    template="01+RU+00+-2]{CPF}",
+    params=[
+        CommandParam(
+            name="CPF",
+            type=str,
+            default="",
+            required=True,
+            description="CPF do colaborador (apenas números)"
+        )
+    ]
+))
+
+# Comando RU consolidado para a interface
+registrar_comando(CommandDefinition(
+    code="RU",
+    description="Receber Colaboradores: Selecione o tipo de filtro (Por Quantidade, Matrícula ou CPF).",
+    template="01+RU+00",  # O template real será substituído no main.py
+    params=[
+        CommandParam(
+            name="Tipo",
+            type=str,
+            description="Tipo de filtro para receber colaboradores",
+            required=True,
+            choices=[
+                {"label": "Por Quantidade", "value": "RU_QUANTIDADE"},
+                {"label": "Por Matrícula", "value": "RU_MATRICULA"},
+                {"label": "Por CPF", "value": "RU_CPF"},
+            ]
+        )
+    ]
+))
+
+# Comando RR consolidado para a interface
 registrar_comando(CommandDefinition(
     code="RR",
     description="Receber Registros: Selecione o tipo de filtro (Memória, NSR ou Data).",

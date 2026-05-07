@@ -914,6 +914,13 @@ class EvoRepAuthApp(QWidget):
             
             self.client_btn_server_control.clicked.connect(self.on_connect_clicked)
             self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
+            
+            # 🔹 REQUISITO: Botão Macro para F2 (Client Mode)
+            macro_btn = QPushButton("Macro")
+            macro_btn.setVisible(False)
+            macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
+            conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
+            setattr(self, f"{prefix}macro_button", macro_btn)
         elif is_f3:
             self.f3_connect_button = QPushButton("Conectar")
             self.f3_connect_button.clicked.connect(self.on_connect_clicked)
@@ -978,7 +985,7 @@ class EvoRepAuthApp(QWidget):
             command_combo = NoScrollComboBox()
             command_combo.addItem("Modo Manual / Custom", None)
             for code, cmd_def in COMMANDS_REGISTRY.items():
-                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA"]: continue
+                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA", "RU_QUANTIDADE", "RU_MATRICULA", "RU_CPF"]: continue
                 resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
                 command_combo.addItem(f"{code} - {resumo}", code)
             combo_layout.addWidget(command_combo)
@@ -1139,6 +1146,8 @@ class EvoRepAuthApp(QWidget):
                             input_field.currentIndexChanged.connect(self.update_ec_valor_field)
                         elif cmd_code == "RR" and param.name == "Tipo":
                             input_field.currentIndexChanged.connect(self.update_rr_fields)
+                        elif cmd_code == "RU" and param.name == "Tipo":
+                            input_field.currentIndexChanged.connect(self.update_ru_fields)
                         continue
                 else:
                     input_field = QLineEdit(str(param.default))
@@ -1146,8 +1155,12 @@ class EvoRepAuthApp(QWidget):
                     input_field.returnPressed.connect(self.on_enter_pressed)
 
                     if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
-                        input_field.setInputMask("99/99/99;_")
-                        input_field.setText(time.strftime("%d/%m/%y"))
+                        if "aaaa" in param.description.lower():
+                            input_field.setInputMask("99/99/9999;_")
+                            input_field.setText(time.strftime("%d/%m/%Y"))
+                        else:
+                            input_field.setInputMask("99/99/99;_")
+                            input_field.setText(time.strftime("%d/%m/%y"))
                     elif param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower():
                         input_field.setInputMask("99:99:99;_")
                         input_field.setText(time.strftime("%H:%M:%S"))
@@ -1179,6 +1192,8 @@ class EvoRepAuthApp(QWidget):
                 self.update_ec_valor_field()
             elif cmd_code == "RR":
                 self.update_rr_fields()
+            elif cmd_code == "RU":
+                self.update_ru_fields()
 
     def update_ec_valor_field(self):
         """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
@@ -1249,8 +1264,12 @@ class EvoRepAuthApp(QWidget):
             input_field.returnPressed.connect(self.on_enter_pressed)
 
             if param.name.lower() == "data" or "dd/mm/aa" in param.description.lower():
-                input_field.setInputMask("99/99/99;_")
-                input_field.setText(time.strftime("%d/%m/%y"))
+                if "aaaa" in param.description.lower():
+                    input_field.setInputMask("99/99/9999;_")
+                    input_field.setText(time.strftime("%d/%m/%Y"))
+                else:
+                    input_field.setInputMask("99/99/99;_")
+                    input_field.setText(time.strftime("%d/%m/%y"))
             elif param.name.lower() == "hora" or "hh:mm:ss" in param.description.lower():
                 input_field.setInputMask("99:99:99;_")
                 input_field.setText(time.strftime("%H:%M:%S"))
@@ -1277,6 +1296,33 @@ class EvoRepAuthApp(QWidget):
 
         if pending_data_field is not None:
             dynamic_layout.addRow(pending_data_label, pending_data_field)
+
+    def update_ru_fields(self):
+        """Atualiza os campos secundários do comando RU com base no 'Tipo' selecionado."""
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        tipo_combo = self.param_inputs.get("Tipo")
+        if not tipo_combo: return
+
+        sub_cmd_code = tipo_combo.currentData()
+        sub_cmd_def = COMMANDS_REGISTRY.get(sub_cmd_code)
+
+        while dynamic_layout.rowCount() > 1:
+            dynamic_layout.removeRow(1)
+
+        keys_to_remove = [k for k in self.param_inputs.keys() if k not in ["Tipo", "_manual"]]
+        for k in keys_to_remove:
+            del self.param_inputs[k]
+
+        if not sub_cmd_def: return
+
+        for param in sub_cmd_def.params:
+            label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
+            input_field = QLineEdit(str(param.default))
+            input_field.setPlaceholderText(param.description)
+            input_field.returnPressed.connect(self.on_enter_pressed)
+            dynamic_layout.addRow(label_text, input_field)
+            self.param_inputs[param.name] = input_field
 
     def eventFilter(self, source, event):
         if source == getattr(self, "manual_input", None) and event.type() == QEvent.Type.KeyPress:
@@ -1324,6 +1370,8 @@ class EvoRepAuthApp(QWidget):
             self.history_index = -1
         else:
             if cmd_code == "RR":
+                cmd_code = self.param_inputs["Tipo"].currentData()
+            elif cmd_code == "RU":
                 cmd_code = self.param_inputs["Tipo"].currentData()
                 
             cmd_def = COMMANDS_REGISTRY[cmd_code]
@@ -1446,6 +1494,9 @@ class EvoRepAuthApp(QWidget):
         self.on_command_selected(0)
 
     def save_config(self):
+        # Salva a aba atual
+        self.settings.setValue("active_tab", self.stacked_widget.currentIndex())
+
         prefix = self._get_active_prefix()
         ip_input = getattr(self, f"{prefix}ip_input")
         port_input = getattr(self, f"{prefix}port_input")
@@ -1559,19 +1610,26 @@ class EvoRepAuthApp(QWidget):
                         # 🔹 REQUISITO: Se o código de desbloqueio estiver vazio, o equipamento já está desbloqueado
                         if not unlock_code:
                             QMessageBox.information(self, "Conexão F3", "Equipamento já desbloqueado")
+                            # 🔹 REQUISITO: Desconectar após fechar o popup (via Timer para evitar deadlock)
+                            QTimer.singleShot(100, lambda: self.disconnect(prefix))
                 except Exception as e:
                     self.append_log(f"F3: Erro ao processar dados de identificação: {e}")
             elif text.startswith("01+EB+000"):
                 QMessageBox.information(self, "Desbloqueio F3", "Equipamento desbloqueado com sucesso!")
             elif text.startswith("01+EB+012"):
                 QMessageBox.warning(self, "Desbloqueio F3", "Código de Desbloqueio Inválido")
-            elif text == "00+00+015":
+            elif "00+00+015" in text:
                 # 🔹 REQUISITO: Auto-reconexão no erro 015
+                self.append_log(f"F3: Erro 015 detectado na resposta: {text}")
                 if state["reconnect_count"] < 3:
                     state["reconnect_count"] += 1
-                    self.append_log(f"F3: Erro 015 recebido. Tentativa de reconexão automática {state['reconnect_count']}/3...")
-                    # Pequeno delay para garantir que o socket seja fechado e reaberto corretamente
-                    QTimer.singleShot(500, self.on_connect_clicked) # Chama on_connect_clicked (que fará disconnect e connect)
+                    self.append_log(f"F3: Iniciando ciclo de reconexão automática {state['reconnect_count']}/3...")
+                    
+                    # 1. Desconecta (limpa sockets e workers)
+                    self.disconnect(prefix)
+                    
+                    # 2. Agenda a nova conexão para daqui a 0.5 segundos (tempo para o socket liberar no SO)
+                    QTimer.singleShot(500, self.on_connect_clicked)
                 else:
                     self.append_log("F3: Erro 015 persistente após 3 tentativas. Reconexão automática interrompida.")
                     state["reconnect_count"] = 0 # Reseta para permitir nova tentativa manual
