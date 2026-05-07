@@ -5,6 +5,7 @@ import base64
 import traceback
 import time
 import random
+import re
 from comandos import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
@@ -103,6 +104,19 @@ class MacroWindow(QWidget):
         group_box.setLayout(group_layout)
         layout.addWidget(group_box)
         
+        # Novo Box: Deletar colaboradores do REP
+        delete_group_box = QGroupBox("Deletar colaboradores do REP")
+        delete_layout = QFormLayout()
+        
+        self.delete_count_input = QLineEdit("10")
+        delete_layout.addRow("Quantidade:", self.delete_count_input)
+        
+        self.btn_delete_rep = QPushButton("Deletar")
+        delete_layout.addRow(self.btn_delete_rep)
+        
+        delete_group_box.setLayout(delete_layout)
+        layout.addWidget(delete_group_box)
+        
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         layout.addWidget(QLabel("Status:"))
@@ -113,10 +127,16 @@ class MacroWindow(QWidget):
         self.btn_bulk.clicked.connect(self.on_bulk_clicked)
         self.btn_sequential.clicked.connect(self.on_sequential_clicked)
         self.btn_delete_last.clicked.connect(self.on_delete_last_clicked)
+        self.btn_delete_rep.clicked.connect(self.on_delete_rep_clicked)
         
         self.is_running = False
+        self.is_deleting = False
         self.queue = []
         self.last_generated_ids = []
+        self.delete_queue_cpfs = []
+        self.target_delete_count = 0
+        self.current_ru_index = 0
+        self.delete_chunks = []
 
     def log(self, msg):
         self.log_output.append(msg)
@@ -129,7 +149,7 @@ class MacroWindow(QWidget):
         }
 
     def on_bulk_clicked(self):
-        if self.is_running: return
+        if self.is_running or self.is_deleting: return
         try:
             count = int(self.count_input.text())
         except:
@@ -150,7 +170,7 @@ class MacroWindow(QWidget):
         self.btn_delete_last.setVisible(True)
 
     def on_sequential_clicked(self):
-        if self.is_running: return
+        if self.is_running or self.is_deleting: return
         try:
             count = int(self.count_input.text())
         except:
@@ -186,7 +206,7 @@ class MacroWindow(QWidget):
         self.log(f"Enviando ({len(self.queue)} restantes): {emp['nome']}")
 
     def on_delete_last_clicked(self):
-        if not self.last_generated_ids: return
+        if not self.last_generated_ids or self.is_deleting: return
         
         count = len(self.last_generated_ids)
         # 01+EU+00+{Quantidade}+E[{ID}]E[{ID2}]...
@@ -198,10 +218,103 @@ class MacroWindow(QWidget):
         self.btn_delete_last.setVisible(False)
         self.last_generated_ids = []
 
-    def handle_response(self):
+    def on_delete_rep_clicked(self):
+        if self.is_running or self.is_deleting: return
+        try:
+            self.target_delete_count = int(self.delete_count_input.text())
+            if self.target_delete_count <= 0: raise ValueError()
+        except:
+            QMessageBox.warning(self, "Erro", "Quantidade inválida")
+            return
+            
+        self.is_deleting = True
+        self.delete_queue_cpfs = []
+        self.current_ru_index = 0
+        self.delete_chunks = []
+        
+        self.btn_bulk.setEnabled(False)
+        self.btn_sequential.setEnabled(False)
+        self.btn_delete_rep.setEnabled(False)
+        
+        self.log(f"Iniciando coleta de CPFs para deletar {self.target_delete_count} colaboradores...")
+        self.request_next_cpfs()
+
+    def request_next_cpfs(self):
+        remaining = self.target_delete_count - len(self.delete_queue_cpfs)
+        if remaining <= 0:
+            self.start_deletion_phase()
+            return
+            
+        batch_size = min(50, remaining)
+        # 01+RU+00+{Quantidade}]{Índice}
+        command_str = f"01+RU+00+{batch_size}]{self.current_ru_index}"
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log(f"Coletando CPFs... (Índice: {self.current_ru_index}, Meta: {self.target_delete_count})")
+
+    def start_deletion_phase(self):
+        if not self.delete_queue_cpfs:
+            self.log("Nenhum CPF coletado para deletar.")
+            self.finish_deletion()
+            return
+            
+        self.log(f"Coletados {len(self.delete_queue_cpfs)} CPFs. Iniciando exclusão...")
+        
+        # Dividir em chunks de 50
+        self.delete_chunks = [self.delete_queue_cpfs[i:i + 50] for i in range(0, len(self.delete_queue_cpfs), 50)]
+        self.send_next_delete_chunk()
+
+    def send_next_delete_chunk(self):
+        if not self.delete_chunks:
+            self.log("Exclusão concluída.")
+            self.finish_deletion()
+            return
+            
+        chunk = self.delete_chunks.pop(0)
+        count = len(chunk)
+        # 01+EU+00+{Quantidade}+E[{ID}]E[{ID2}]...
+        parts = [f"E[{id_val}]" for id_val in chunk]
+        command_str = f"01+EU+00+{count}+" + "".join(parts)
+        
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log(f"Enviando exclusão de {count} CPFs ({len(self.delete_chunks)} blocos restantes)...")
+
+    def finish_deletion(self):
+        self.is_deleting = False
+        self.btn_bulk.setEnabled(True)
+        self.btn_sequential.setEnabled(True)
+        self.btn_delete_rep.setEnabled(True)
+
+    def handle_response(self, text):
         if self.is_running:
             # Aguarda um pouco antes de enviar o próximo para não saturar
             QTimer.singleShot(100, self.send_next_in_queue)
+            return
+
+        if self.is_deleting:
+            if "+RU+" in text:
+                cpfs = re.findall(r"(\d{11})\[", text)
+                if not cpfs:
+                    self.log("Nenhum CPF retornado na resposta RU. Iniciando exclusão com o que foi coletado.")
+                    self.start_deletion_phase()
+                    return
+                
+                added_count = 0
+                for cpf in cpfs:
+                    if cpf not in self.delete_queue_cpfs and len(self.delete_queue_cpfs) < self.target_delete_count:
+                        self.delete_queue_cpfs.append(cpf)
+                        added_count += 1
+                
+                self.log(f"Recebidos {len(cpfs)} CPFs ({added_count} novos). Total: {len(self.delete_queue_cpfs)}")
+                
+                if len(self.delete_queue_cpfs) >= self.target_delete_count:
+                    self.start_deletion_phase()
+                else:
+                    self.current_ru_index += 50
+                    QTimer.singleShot(100, self.request_next_cpfs)
+            
+            elif "+EU+" in text:
+                # Recebeu confirmação de um bloco de exclusão
+                QTimer.singleShot(100, self.send_next_delete_chunk)
 
 
 class EvoRepProtocol:
@@ -1581,11 +1694,11 @@ class EvoRepAuthApp(QWidget):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
         
-        # 🔹 REQUISITO: Se houver macro sequencial rodando, notificar a janela
+        # 🔹 REQUISITO: Se houver macro rodando, notificar a janela
         if hasattr(self, f"{prefix}macro_window"):
             window = getattr(self, f"{prefix}macro_window")
-            if window.is_running:
-                window.handle_response()
+            if window.is_running or getattr(window, 'is_deleting', False):
+                window.handle_response(text)
 
         # 🔹 Lógica especial para processar resposta RB na aba F3
         if prefix == "f3_":
