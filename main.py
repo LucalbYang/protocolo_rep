@@ -648,13 +648,15 @@ class ClientNetworkWorker(QThread):
             rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
             n, e, mod_b64 = rsa_pubkey_data
             
-            public_key_b32 = EvoRepCrypto.format_modulus_to_b32(mod_b64)
-            self.log_signal.emit(f"Chave Pública do equipamento: {public_key_b32}")
+            self.log_signal.emit("[DEBUG] Chave RSA extraída com sucesso.")
 
             session_key = EvoRepCrypto.generate_aes_key()
+            self.log_signal.emit("[DEBUG] Chave de sessão AES-128 gerada.")
+            
             session_key_b64 = base64.b64encode(session_key).decode("utf-8")
             credential = f"1]{self.user}]{self.password}]{session_key_b64}"
 
+            self.log_signal.emit(f"[DEBUG] Credenciais preparadas (Criptografando com RSA).")
             encrypted = EvoRepCrypto.encrypt_credentials_with_rsa((n, e), credential)
             encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
 
@@ -1501,6 +1503,16 @@ class EvoRepAuthApp(QWidget):
                     if param_name == "Matrícula2" and val: val = "}" + val
                     elif param_name == "Senha" and val: val = "[" + val
                 kwargs[param_name] = val
+
+            # 🔹 REQUISITO: Detecção automática de Tipo para o comando EE (Empregador)
+            if cmd_code == "EE":
+                id_val = str(kwargs.get("ID", "")).replace(".", "").replace("-", "").replace("/", "").strip()
+                if len(id_val) == 14:
+                    kwargs["Tipo"] = "1"
+                elif len(id_val) == 11:
+                    kwargs["Tipo"] = "2"
+                # Removemos formatação do ID para enviar apenas números
+                kwargs["ID"] = id_val
             try:
                 command_str = cmd_def.build(**kwargs)
             except ValueError as e:
@@ -1646,10 +1658,19 @@ class EvoRepAuthApp(QWidget):
         else:
             sent_output.setPlainText(state["last_sent_text"])
             received_output.setPlainText(state["last_received_text"])
-            
-        sent_output.verticalScrollBar().setValue(sent_output.verticalScrollBar().maximum())
-        received_output.verticalScrollBar().setValue(received_output.verticalScrollBar().maximum())
 
+        # 🔹 REQUISITO: Garantir que o scroll desça até o final. 
+        # setPlainText() reseta o scroll e o layout pode levar um milissegundo para atualizar.
+        # Usamos singleShot(0) para executar na próxima iteração do loop de eventos.
+        QTimer.singleShot(0, lambda: self._scroll_to_bottom(sent_output))
+        QTimer.singleShot(0, lambda: self._scroll_to_bottom(received_output))
+
+    def _scroll_to_bottom(self, text_edit):
+        """Move o scroll e o cursor para o final do QTextEdit."""
+        from PyQt6.QtGui import QTextCursor
+        text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        scrollbar = text_edit.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
     def append_sent(self, text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
@@ -1729,6 +1750,8 @@ class EvoRepAuthApp(QWidget):
                     self.append_log(f"F3: Erro ao processar dados de identificação: {e}")
             elif text.startswith("01+EB+000"):
                 QMessageBox.information(self, "Desbloqueio F3", "Equipamento desbloqueado com sucesso!")
+                # 🔹 REQUISITO: Desconectar automaticamente após sucesso no desbloqueio
+                QTimer.singleShot(100, lambda: self.disconnect(prefix))
             elif text.startswith("01+EB+012"):
                 QMessageBox.warning(self, "Desbloqueio F3", "Código de Desbloqueio Inválido")
             elif "00+00+015" in text:
