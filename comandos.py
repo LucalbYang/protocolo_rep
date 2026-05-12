@@ -225,8 +225,8 @@ registrar_comando(CommandDefinition(
             description="Selecione a configuração a ser alterada",
             required=True,
             choices=[
-                {"label": "LOGIN - Nome do usuário (16 caracteres)", "value": "LOGIN"},
-                {"label": "SENHA_MENU - Senha numérica (6 dígitos)", "value": "SENHA_MENU"},
+                {"label": "LOGIN - Nome do usuário - Max. 16 caracteres (Apenas ADM)", "value": "LOGIN"},
+                {"label": "SENHA_MENU - Senha numérica - 6 dígitos (Apenas ADM)", "value": "SENHA_MENU"},
                 {"label": "LEITOR_VER_DIG - Solicitar biometria: H (Habilitado) / D (Desabilitado)", "value": "LEITOR_VER_DIG"},
                 {"label": "TAM_BOB - Comprimento da bobina (0 ~ 400)", "value": "TAM_BOB"},
                 {"label": "EVENTO_ON - Enviar eventos online: H (Habilitado) / D (Desabilitado)", "value": "EVENTO_ON"},
@@ -412,7 +412,7 @@ registrar_comando(CommandDefinition(
 
 registrar_comando(CommandDefinition(
     code="ES",
-    description="Enviar Usuário do Sistema: Cadastra um usuário para acesso ao sistema/webserver.",
+    description="Enviar Usuário do Sistema (Apenas ADM): Cadastra um usuário para acesso ao sistema/webserver.",
     template="01+{code}+00+1+I[{CPF}[{Login}[{Senha}[{Cartão}[111111",
     params=[
         CommandParam(
@@ -605,6 +605,139 @@ registrar_comando(CommandDefinition(
                 {"label": "Por Memória", "value": "RR_MEMORIA"},
                 {"label": "Por NSR", "value": "RR_NSR"},
                 {"label": "Por Data", "value": "RR_DATA"},
+            ]
+        )
+    ]
+))
+
+# ========== Comandos ED (Enviar/Cadastrar/Deletar Biometria) ==========
+
+registrar_comando(CommandDefinition(
+    code="ED_CADASTRAR",
+    description="Cadastrar Biometria: Registra a biometria de um colaborador.",
+    template="01+ED+00+R]{Matricula}",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="ED_DELETAR",
+    description="Deletar Biometria: Remove a biometria de um colaborador.",
+    template="01+ED+00+E]{Matricula}",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="ED_SUPREMA",
+    description="Enviar Biometria (Suprema): Cadastra até 10 templates no módulo Suprema.",
+    template="01+ED+00+D]{Matricula}}}3}}{TP_DATA}",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        ),
+        CommandParam(
+            name="TP_DATA",
+            type=str,
+            description="Templates (até 10)",
+            required=True
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="ED_BIO_AZUL",
+    description="Enviar Biometria (EVO Bio Azul): Cadastra template no módulo Bio Azul.",
+    template="01+ED+00+T]{Matricula}}K}B}{Index}}00810",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        ),
+        CommandParam(
+            name="Index",
+            type=str,
+            description="Index da template",
+            required=True
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="ED_FACE",
+    description="Enviar Biometria (EVO Face): Cadastra template no módulo Facial.",
+    template="01+ED+00+T]{Matricula}}R}B}{Index}}02048",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        ),
+        CommandParam(
+            name="Index",
+            type=str,
+            description="Index da template",
+            required=True
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="ED_FACE_CORP",
+    description="Enviar Biometria (Face Corp): Cadastra template no módulo Face Corp.",
+    template="01+ED+00+T]{Matricula}}X}B}{Index}}01072",
+    params=[
+        CommandParam(
+            name="Matricula",
+            type=str,
+            description="Matrícula do colaborador",
+            required=True
+        ),
+        CommandParam(
+            name="Index",
+            type=str,
+            description="Index da template",
+            required=True
+        )
+    ]
+))
+
+# Comando ED consolidado para a interface
+registrar_comando(CommandDefinition(
+    code="ED",
+    description="Enviar/Cadastrar/Deletar Biometria: Selecione a operação desejada.",
+    template="01+ED+00", # O template real será substituído no main.py
+    params=[
+        CommandParam(
+            name="Operação",
+            type=str,
+            description="Tipo de operação",
+            required=True,
+            choices=[
+                {"label": "Cadastrar Biometria", "value": "ED_CADASTRAR"},
+                {"label": "Deletar Biometria", "value": "ED_DELETAR"},
+                {"label": "Enviar - Módulo Suprema", "value": "ED_SUPREMA"},
+                {"label": "Enviar - EVO Bio Azul", "value": "ED_BIO_AZUL"},
+                {"label": "Enviar - EVO Face", "value": "ED_FACE"},
+                {"label": "Enviar - Face Corp", "value": "ED_FACE_CORP"},
             ]
         )
     ]

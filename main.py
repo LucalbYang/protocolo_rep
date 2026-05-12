@@ -12,7 +12,8 @@ from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
                              QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
-                             QComboBox, QFormLayout, QScrollArea, QCheckBox, QFrame)
+                             QComboBox, QFormLayout, QScrollArea, QCheckBox, QFrame,
+                             QRadioButton, QButtonGroup)
 
 # Prefer pycryptodome, fallback para cryptography se necessário.
 try:
@@ -43,6 +44,26 @@ class NoScrollComboBox(QComboBox):
             event.ignore()
         else:
             super().keyPressEvent(event)
+
+
+APP_VERSION = "0.1"
+
+class VersionLabel(QLabel):
+    """Label de versão com Easter Egg de dois cliques."""
+    def __init__(self, parent=None):
+        super().__init__(f"{APP_VERSION}", parent)
+        self.setStyleSheet("color: #aaaaaa; font-size: 10px; font-weight: bold;")
+        self.setContentsMargins(2, 0, 0, 0)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setText("Lucas C Albuquerque")
+            self.setStyleSheet("color: #0078d7; font-size: 10px; font-weight: bold;")
+            QTimer.singleShot(1000, self.reset_version)
+
+    def reset_version(self):
+        self.setText(f"v{APP_VERSION}")
+        self.setStyleSheet("color: #aaaaaa; font-size: 10px; font-weight: bold;")
 
 
 def generate_cpf():
@@ -973,7 +994,17 @@ class EvoRepAuthApp(QWidget):
         self.stacked_widget.addWidget(self.f3_tab)     # Index 3
 
         root_layout = QVBoxLayout()
+        
+        # 🔹 REQUISITO: Versão no topo
+        version_hbox = QHBoxLayout()
+        version_hbox.setContentsMargins(5, 0, 5, 0)
+        self.version_label = VersionLabel()
+        version_hbox.addWidget(self.version_label)
+        version_hbox.addStretch(1)
+        root_layout.addLayout(version_hbox)
+        
         root_layout.addWidget(self.stacked_widget)
+
         self.setLayout(root_layout)
         
         self.setMinimumSize(850, 600)
@@ -1100,7 +1131,7 @@ class EvoRepAuthApp(QWidget):
             command_combo = NoScrollComboBox()
             command_combo.addItem("Modo Manual / Custom", None)
             for code, cmd_def in COMMANDS_REGISTRY.items():
-                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA", "RU_QUANTIDADE", "RU_MATRICULA", "RU_CPF"]: continue
+                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA", "RU_QUANTIDADE", "RU_MATRICULA", "RU_CPF", "ED_CADASTRAR", "ED_DELETAR", "ED_SUPREMA", "ED_BIO_AZUL", "ED_FACE", "ED_FACE_CORP"]: continue
                 resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
                 command_combo.addItem(f"{code} - {resumo}", code)
             combo_layout.addWidget(command_combo)
@@ -1194,6 +1225,7 @@ class EvoRepAuthApp(QWidget):
     def _create_log_tab(self):
         log_tab = QWidget()
         log_layout = QVBoxLayout()
+        
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         log_layout.addWidget(self.log_output)
@@ -1224,7 +1256,7 @@ class EvoRepAuthApp(QWidget):
         cmd_code = command_combo.currentData()
 
         if cmd_code is None:
-            cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la sem validação.")
+            cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la diretamente.")
             self.manual_input = QLineEdit(self.last_manual_command)
             self.manual_input.installEventFilter(self)
             self.manual_input.returnPressed.connect(self.on_enter_pressed)
@@ -1263,6 +1295,8 @@ class EvoRepAuthApp(QWidget):
                             input_field.currentIndexChanged.connect(self.update_rr_fields)
                         elif cmd_code == "RU" and param.name == "Tipo":
                             input_field.currentIndexChanged.connect(self.update_ru_fields)
+                        elif cmd_code == "ED" and param.name == "Operação":
+                            input_field.currentIndexChanged.connect(self.update_ed_fields)
                         continue
                 else:
                     input_field = QLineEdit(str(param.default))
@@ -1309,6 +1343,8 @@ class EvoRepAuthApp(QWidget):
                 self.update_rr_fields()
             elif cmd_code == "RU":
                 self.update_ru_fields()
+            elif cmd_code == "ED":
+                self.update_ed_fields()
 
     def update_ec_valor_field(self):
         """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
@@ -1439,6 +1475,94 @@ class EvoRepAuthApp(QWidget):
             dynamic_layout.addRow(label_text, input_field)
             self.param_inputs[param.name] = input_field
 
+    def update_ed_fields(self):
+        """Atualiza os campos secundários do comando ED com base na 'Operação' selecionada."""
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        operacao_combo = self.param_inputs.get("Operação")
+        if not operacao_combo: return
+
+        sub_cmd_code = operacao_combo.currentData()
+        sub_cmd_def = COMMANDS_REGISTRY.get(sub_cmd_code)
+
+        while dynamic_layout.rowCount() > 1:
+            dynamic_layout.removeRow(1)
+
+        keys_to_remove = [k for k in self.param_inputs.keys() if k not in ["Operação", "_manual"]]
+        for k in keys_to_remove:
+            del self.param_inputs[k]
+
+        if not sub_cmd_def: return
+
+        if sub_cmd_code == "ED_CADASTRAR":
+            # Tipo de Biometria: Digital ou Facial
+            bio_widget = QWidget()
+            bio_layout = QHBoxLayout(bio_widget)
+            bio_layout.setContentsMargins(0, 0, 0, 0)
+            bio_layout.setSpacing(10)
+
+            digital_radio = QRadioButton("Digital")
+            digital_radio.setChecked(True)
+            facial_radio = QRadioButton("Facial")
+
+            bio_group = QButtonGroup(self)
+            bio_group.addButton(digital_radio)
+            bio_group.addButton(facial_radio)
+            self.param_inputs["BiometriaTipo"] = bio_group
+
+            bio_layout.addWidget(digital_radio)
+            bio_layout.addWidget(facial_radio)
+            dynamic_layout.addRow("Biometria:", bio_widget)
+
+            # Campo para Matrícula
+            label_text = "Matrícula:"
+            input_field = QLineEdit(str(""))
+            input_field.setPlaceholderText("Matrícula do colaborador")
+            input_field.returnPressed.connect(self.on_enter_pressed)
+            dynamic_layout.addRow(label_text, input_field)
+            self.param_inputs["Matricula"] = input_field
+        elif sub_cmd_code == "ED_SUPREMA":
+            # Campo para Matrícula
+            label_text = "Matrícula:"
+            input_field = QLineEdit(str(""))
+            input_field.setPlaceholderText("Matrícula do colaborador")
+            input_field.returnPressed.connect(self.on_enter_pressed)
+            dynamic_layout.addRow(label_text, input_field)
+            self.param_inputs["Matricula"] = input_field
+            
+            # Grid para 10 templates (2 linhas x 5 colunas)
+            tp_grid_container = QWidget()
+            tp_grid_layout = QGridLayout(tp_grid_container)
+            tp_grid_layout.setContentsMargins(0, 0, 0, 0)
+            tp_grid_layout.setSpacing(5)
+            
+            self.suprema_tp_inputs = []
+            for i in range(1, 11):
+                tp_field = QLineEdit()
+                tp_field.setPlaceholderText(f"TP{i}")
+                tp_field.returnPressed.connect(self.on_enter_pressed)
+                tp_field.setMaxLength(5000)  # Permitir copiar/colar grandes valores
+                tp_field.setMinimumWidth(80)
+                
+                # Calcular linha e coluna: 1-5 na linha 0, 6-10 na linha 1
+                row = (i - 1) // 5
+                col = (i - 1) % 5
+                
+                tp_grid_layout.addWidget(tp_field, row, col)
+                self.suprema_tp_inputs.append(tp_field)
+                self.param_inputs[f"TP{i}"] = tp_field
+            
+            dynamic_layout.addRow("Templates:", tp_grid_container)
+        else:
+            # Tratamento padrão para outros sub-comandos
+            for param in sub_cmd_def.params:
+                label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
+                input_field = QLineEdit(str(param.default))
+                input_field.setPlaceholderText(param.description)
+                input_field.returnPressed.connect(self.on_enter_pressed)
+                dynamic_layout.addRow(label_text, input_field)
+                self.param_inputs[param.name] = input_field
+
     def eventFilter(self, source, event):
         if source == getattr(self, "manual_input", None) and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Up:
@@ -1488,37 +1612,94 @@ class EvoRepAuthApp(QWidget):
                 cmd_code = self.param_inputs["Tipo"].currentData()
             elif cmd_code == "RU":
                 cmd_code = self.param_inputs["Tipo"].currentData()
+            elif cmd_code == "ED":
+                cmd_code = self.param_inputs["Operação"].currentData()
                 
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             kwargs = {}
-            for param_name, input_field in self.param_inputs.items():
-                if isinstance(input_field, list):
-                    selected_values = [cb.property("value") for cb in input_field if cb.isChecked()]
-                    val = "]".join(selected_values)
-                elif isinstance(input_field, QComboBox):
-                    val = input_field.currentData()
+            command_str = None
+            
+            if cmd_code.startswith("ED_"):
+                matricula = self.param_inputs.get("Matricula")
+                if matricula:
+                    mat_val = matricula.text().strip()
+                    if not mat_val:
+                        QMessageBox.warning(self, "Aviso", "Preencha a matrícula antes de enviar.")
+                        return
+                    kwargs["Matricula"] = mat_val
                 else:
-                    val = input_field.text().strip()
-                if cmd_code == "EU":
-                    if param_name == "Matrícula2" and val: val = "}" + val
-                    elif param_name == "Senha" and val: val = "[" + val
-                kwargs[param_name] = val
+                    QMessageBox.warning(self, "Aviso", "Campo de matrícula não encontrado.")
+                    return
 
-            # 🔹 REQUISITO: Detecção automática de Tipo para o comando EE (Empregador)
-            if cmd_code == "EE":
-                id_val = str(kwargs.get("ID", "")).replace(".", "").replace("-", "").replace("/", "").strip()
-                if len(id_val) == 14:
-                    kwargs["Tipo"] = "1"
-                elif len(id_val) == 11:
-                    kwargs["Tipo"] = "2"
-                # Removemos formatação do ID para enviar apenas números
-                kwargs["ID"] = id_val
-            try:
-                command_str = cmd_def.build(**kwargs)
-            except ValueError as e:
-                QMessageBox.warning(self, "Erro de Validação", str(e))
-                self.append_log(f"Comando abortado: {e}")
-                return
+                # 🔹 Tratamento especial para ED_CADASTRAR
+                if cmd_code == "ED_CADASTRAR":
+                    bio_group = self.param_inputs.get("BiometriaTipo")
+                    if bio_group and isinstance(bio_group, QButtonGroup):
+                        selected_button = bio_group.checkedButton()
+                        if selected_button:
+                            if selected_button.text() == "Digital":
+                                bio_mode = "D"
+                            elif selected_button.text() == "Facial":
+                                bio_mode = "F"
+                            else:
+                                bio_mode = "D" # Fallback if text is unexpected
+                        else:
+                            bio_mode = "D" # Fallback if no button is checked
+                    else:
+                        bio_mode = "D" # Fallback if bio_group is not valid
+                    command_str = f"01+ED+00+R]{bio_mode}}}{mat_val}"
+                
+                # 🔹 Tratamento especial para ED_SUPREMA
+                elif cmd_code == "ED_SUPREMA":
+                    tp_parts = []
+                    for i in range(1, 11):
+                        tp_field = self.param_inputs.get(f"TP{i}")
+                        if tp_field and tp_field.text().strip():
+                            tp_val = tp_field.text().strip()
+                            tp_parts.append(f"{i}{{<{tp_val}>")
+                    
+                    if tp_parts:
+                        kwargs["TP_DATA"] = "".join(tp_parts)
+                        command_str = cmd_def.build(**kwargs)
+                    else:
+                        QMessageBox.warning(self, "Aviso", "Nenhum template foi preenchido. Por favor, preencha pelo menos um template.")
+                        return
+                else:
+                    # Outros comandos ED_ (DELETAR, BIO_AZUL, FACE, etc)
+                    command_str = cmd_def.build(**kwargs)
+            else:
+                for param_name, input_field in self.param_inputs.items():
+                    if isinstance(input_field, list):
+                        selected_values = [cb.property("value") for cb in input_field if cb.isChecked()]
+                        val = "]".join(selected_values)
+                    elif isinstance(input_field, QButtonGroup):
+                        selected_button = input_field.checkedButton()
+                        val = selected_button.text() if selected_button else ""
+                    elif isinstance(input_field, QComboBox):
+                        val = input_field.currentData()
+                    else:
+                        val = input_field.text().strip()
+                    if cmd_code == "EU":
+                        if param_name == "Matrícula2" and val: val = "}" + val
+                        elif param_name == "Senha" and val: val = "[" + val
+                    kwargs[param_name] = val
+
+                # 🔹 REQUISITO: Detecção automática de Tipo para o comando EE (Empregador)
+                if cmd_code == "EE":
+                    id_val = str(kwargs.get("ID", "")).replace(".", "").replace("-", "").replace("/", "").strip()
+                    if len(id_val) == 14:
+                        kwargs["Tipo"] = "1"
+                    elif len(id_val) == 11:
+                        kwargs["Tipo"] = "2"
+                    # Removemos formatação do ID para enviar apenas números
+                    kwargs["ID"] = id_val
+                
+                try:
+                    command_str = cmd_def.build(**kwargs)
+                except ValueError as e:
+                    QMessageBox.warning(self, "Erro de Validação", str(e))
+                    self.append_log(f"Comando abortado: {e}")
+                    return
 
         send_button = self._get_widget("send_button")
         send_button.setEnabled(False)
