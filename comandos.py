@@ -290,7 +290,7 @@ registrar_comando(CommandDefinition(
             name="Valor",
             type=str,
             description="Valor a ser definido",
-            required=True
+            required=False
         )
     ]
 ))
@@ -740,5 +740,52 @@ registrar_comando(CommandDefinition(
                 {"label": "Enviar - Face Corp", "value": "ED_FACE_CORP"},
             ]
         )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RD",
+    description="Receber Biometria: Solicita lista, quantidade ou templates biométricos.",
+    template="01+RD+00",
+    params=[
+        CommandParam(
+            name="Operação",
+            type=str,
+            choices=[
+                {"label": "Solicitar Lista", "value": "RD_LISTA"},
+                {"label": "Solicitar Quantidade", "value": "RD_QTD"},
+                {"label": "Receber Template", "value": "RD_TEMPLATE"},
+            ]
+        )
+    ]
+))
+
+# Sub-comandos RD
+registrar_comando(CommandDefinition(
+    code="RD_LISTA",
+    description="Solicitar Lista de Biometrias",
+    template="01+RD+00+L]{Quantidade}}{Indice}",
+    params=[
+        CommandParam(name="Quantidade", type=int, default=10, description="Quantidade de registros"),
+        CommandParam(name="Indice", type=int, default=0, description="Índice inicial")
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RD_QTD",
+    description="Solicitar Quantidade de Biometrias (Suprema/EVO)",
+    template="01+RD+00+Q]{Matricula}",
+    params=[
+        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador")
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RD_TEMPLATE",
+    description="Receber Template Biométrico",
+    template="01+RD+00+D]{Matricula}",
+    params=[
+        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador"),
+        CommandParam(name="Index", type=int, default=0, description="Index da template (Digital 0~9, Facial 0~7)")
     ]
 ))

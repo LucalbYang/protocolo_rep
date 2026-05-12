@@ -145,6 +145,12 @@ class MacroWindow(QWidget):
         
         self.setLayout(layout)
         
+        # PERSISTÊNCIA: Carregar posição e tamanho salvos
+        self.settings = QSettings("EvoRep", "MacroWindow")
+        geom = self.settings.value(f"geometry_{self.prefix}")
+        if geom:
+            self.restoreGeometry(geom)
+        
         self.btn_bulk.clicked.connect(self.on_bulk_clicked)
         self.btn_sequential.clicked.connect(self.on_sequential_clicked)
         self.btn_delete_last.clicked.connect(self.on_delete_last_clicked)
@@ -158,6 +164,26 @@ class MacroWindow(QWidget):
         self.target_delete_count = 0
         self.current_ru_index = 0
         self.delete_chunks = []
+
+    def closeEvent(self, event):
+        # PERSISTÊNCIA: Salvar posição e tamanho ao fechar
+        self.settings.setValue(f"geometry_{self.prefix}", self.saveGeometry())
+        # LIMPEZA: Zerar conteúdo ao fechar
+        self.clear_content()
+        super().closeEvent(event)
+
+    def clear_content(self):
+        self.log_output.clear()
+        self.count_input.setText("10")
+        self.delete_count_input.setText("10")
+        self.btn_delete_last.setVisible(False)
+        self.last_generated_ids = []
+        self.queue = []
+        self.is_running = False
+        self.is_deleting = False
+        self.btn_bulk.setEnabled(True)
+        self.btn_sequential.setEnabled(True)
+        self.btn_delete_rep.setEnabled(True)
 
     def log(self, msg):
         self.log_output.append(msg)
@@ -266,7 +292,7 @@ class MacroWindow(QWidget):
             self.start_deletion_phase()
             return
             
-        batch_size = min(50, remaining)
+        batch_size = min(20, remaining)
         # 01+RU+00+{Quantidade}]{Índice}
         command_str = f"01+RU+00+{batch_size}]{self.current_ru_index}"
         self.parent_app.send_external_command(command_str, self.prefix)
@@ -280,8 +306,8 @@ class MacroWindow(QWidget):
             
         self.log(f"Coletados {len(self.delete_queue_cpfs)} CPFs. Iniciando exclusão...")
         
-        # Dividir em chunks de 50
-        self.delete_chunks = [self.delete_queue_cpfs[i:i + 50] for i in range(0, len(self.delete_queue_cpfs), 50)]
+        # Dividir em chunks de 20
+        self.delete_chunks = [self.delete_queue_cpfs[i:i + 20] for i in range(0, len(self.delete_queue_cpfs), 20)]
         self.send_next_delete_chunk()
 
     def send_next_delete_chunk(self):
@@ -330,7 +356,7 @@ class MacroWindow(QWidget):
                 if len(self.delete_queue_cpfs) >= self.target_delete_count:
                     self.start_deletion_phase()
                 else:
-                    self.current_ru_index += 50
+                    self.current_ru_index += 20
                     QTimer.singleShot(100, self.request_next_cpfs)
             
             elif "+EU+" in text:
@@ -1131,7 +1157,7 @@ class EvoRepAuthApp(QWidget):
             command_combo = NoScrollComboBox()
             command_combo.addItem("Modo Manual / Custom", None)
             for code, cmd_def in COMMANDS_REGISTRY.items():
-                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA", "RU_QUANTIDADE", "RU_MATRICULA", "RU_CPF", "ED_CADASTRAR", "ED_DELETAR", "ED_SUPREMA", "ED_BIO_AZUL", "ED_FACE", "ED_FACE_CORP"]: continue
+                if code in ["RR_MEMORIA", "RR_NSR", "RR_DATA", "RU_QUANTIDADE", "RU_MATRICULA", "RU_CPF", "ED_CADASTRAR", "ED_DELETAR", "ED_SUPREMA", "ED_BIO_AZUL", "ED_FACE", "ED_FACE_CORP", "RD_LISTA", "RD_QTD", "RD_TEMPLATE"]: continue
                 resumo = cmd_def.description.split(':')[0] if ':' in cmd_def.description else cmd_def.description.split('.')[0]
                 command_combo.addItem(f"{code} - {resumo}", code)
             combo_layout.addWidget(command_combo)
@@ -1297,6 +1323,8 @@ class EvoRepAuthApp(QWidget):
                             input_field.currentIndexChanged.connect(self.update_ru_fields)
                         elif cmd_code == "ED" and param.name == "Operação":
                             input_field.currentIndexChanged.connect(self.update_ed_fields)
+                        elif cmd_code == "RD" and param.name == "Operação":
+                            input_field.currentIndexChanged.connect(self.update_rd_fields)
                         continue
                 else:
                     input_field = QLineEdit(str(param.default))
@@ -1345,6 +1373,8 @@ class EvoRepAuthApp(QWidget):
                 self.update_ru_fields()
             elif cmd_code == "ED":
                 self.update_ed_fields()
+            elif cmd_code == "RD":
+                self.update_rd_fields()
 
     def update_ec_valor_field(self):
         """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
@@ -1383,8 +1413,105 @@ class EvoRepAuthApp(QWidget):
         if hasattr(new_input, "returnPressed"):
             new_input.returnPressed.connect(self.on_enter_pressed)
             
-        dynamic_layout.addRow("Valor:", new_input)
+        label_text = "Valor (opcional):" if config_key == "MENSAGEM" else "Valor:"
+        dynamic_layout.addRow(label_text, new_input)
         self.param_inputs["Valor"] = new_input
+
+    def update_rd_fields(self):
+        """Atualiza os campos do comando RD com base na 'Operação' selecionada."""
+        prefix = self._get_active_prefix()
+        dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
+        operacao_combo = self.param_inputs.get("Operação")
+        if not operacao_combo: return
+
+        sub_cmd_code = operacao_combo.currentData()
+        sub_cmd_def = COMMANDS_REGISTRY.get(sub_cmd_code)
+
+        while dynamic_layout.rowCount() > 1:
+            dynamic_layout.removeRow(1)
+
+        keys_to_remove = [k for k in self.param_inputs.keys() if k not in ["Operação", "_manual"]]
+        for k in keys_to_remove:
+            del self.param_inputs[k]
+
+        if not sub_cmd_def: return
+
+        if sub_cmd_code == "RD_LISTA":
+            # Radio ÚNICA ou DUAL
+            radio_widget = QWidget()
+            radio_layout = QHBoxLayout(radio_widget)
+            radio_layout.setContentsMargins(0, 0, 0, 0)
+            unica_radio = QRadioButton("ÚNICA")
+            unica_radio.setChecked(True)
+            dual_radio = QRadioButton("DUAL")
+            radio_group = QButtonGroup(self)
+            radio_group.addButton(unica_radio)
+            radio_group.addButton(dual_radio)
+            self.param_inputs["ListaTipo"] = radio_group
+            radio_layout.addWidget(unica_radio)
+            radio_layout.addWidget(dual_radio)
+            dynamic_layout.addRow("Tipo:", radio_widget)
+
+            for param in sub_cmd_def.params:
+                input_field = QLineEdit(str(param.default))
+                input_field.setPlaceholderText(param.description)
+                input_field.returnPressed.connect(self.on_enter_pressed)
+                dynamic_layout.addRow(f"{param.name}:", input_field)
+                self.param_inputs[param.name] = input_field
+
+        elif sub_cmd_code == "RD_TEMPLATE":
+            # Radio Suprema, EVO BIO, EVO FACE, FACE CORP
+            radio_widget = QWidget()
+            radio_layout = QVBoxLayout(radio_widget)
+            radio_layout.setContentsMargins(0, 0, 0, 0)
+            suprema_radio = QRadioButton("Suprema")
+            suprema_radio.setChecked(True)
+            evobio_radio = QRadioButton("EVO BIO")
+            evoface_radio = QRadioButton("EVO FACE")
+            facecorp_radio = QRadioButton("FACE CORP")
+            
+            radio_group = QButtonGroup(self)
+            radio_group.addButton(suprema_radio)
+            radio_group.addButton(evobio_radio)
+            radio_group.addButton(evoface_radio)
+            radio_group.addButton(facecorp_radio)
+            self.param_inputs["TemplateModelo"] = radio_group
+            
+            radio_layout.addWidget(suprema_radio)
+            radio_layout.addWidget(evobio_radio)
+            radio_layout.addWidget(evoface_radio)
+            radio_layout.addWidget(facecorp_radio)
+            dynamic_layout.addRow("Modelo:", radio_widget)
+
+            # Matricula e Index
+            for param in sub_cmd_def.params:
+                input_field = QLineEdit(str(param.default))
+                input_field.setPlaceholderText(param.description)
+                input_field.returnPressed.connect(self.on_enter_pressed)
+                dynamic_layout.addRow(f"{param.name}:", input_field)
+                self.param_inputs[param.name] = input_field
+                
+            # Função para esconder index se for Suprema ou Face Corp
+            def on_template_radio_changed():
+                selected = radio_group.checkedButton().text()
+                index_field = self.param_inputs.get("Index")
+                if index_field:
+                    # No Suprema e Face Corp o index não é usado na string (Face Corp é fixo 0)
+                    index_field.setEnabled(selected in ["EVO BIO", "EVO FACE"])
+
+            suprema_radio.toggled.connect(on_template_radio_changed)
+            evobio_radio.toggled.connect(on_template_radio_changed)
+            evoface_radio.toggled.connect(on_template_radio_changed)
+            facecorp_radio.toggled.connect(on_template_radio_changed)
+            on_template_radio_changed() # Chama uma vez inicial
+
+        else:
+            for param in sub_cmd_def.params:
+                input_field = QLineEdit(str(param.default))
+                input_field.setPlaceholderText(param.description)
+                input_field.returnPressed.connect(self.on_enter_pressed)
+                dynamic_layout.addRow(f"{param.name}:", input_field)
+                self.param_inputs[param.name] = input_field
 
     def update_rr_fields(self):
         """Atualiza os campos secundários do comando RR com base no 'Tipo' selecionado."""
@@ -1614,6 +1741,8 @@ class EvoRepAuthApp(QWidget):
                 cmd_code = self.param_inputs["Tipo"].currentData()
             elif cmd_code == "ED":
                 cmd_code = self.param_inputs["Operação"].currentData()
+            elif cmd_code == "RD":
+                cmd_code = self.param_inputs["Operação"].currentData()
                 
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             kwargs = {}
@@ -1667,6 +1796,30 @@ class EvoRepAuthApp(QWidget):
                 else:
                     # Outros comandos ED_ (DELETAR, BIO_AZUL, FACE, etc)
                     command_str = cmd_def.build(**kwargs)
+            elif cmd_code.startswith("RD_"):
+                if cmd_code == "RD_LISTA":
+                    radio_group = self.param_inputs.get("ListaTipo")
+                    tipo = "L]D" if radio_group and radio_group.checkedButton().text() == "DUAL" else "L"
+                    qty = self.param_inputs.get("Quantidade").text().strip()
+                    idx = self.param_inputs.get("Indice").text().strip()
+                    command_str = f"01+RD+00+{tipo}]{qty}}}{idx}"
+                elif cmd_code == "RD_QTD":
+                    mat = self.param_inputs.get("Matricula").text().strip()
+                    command_str = f"01+RD+00+Q]{mat}"
+                elif cmd_code == "RD_TEMPLATE":
+                    radio_group = self.param_inputs.get("TemplateModelo")
+                    modelo = radio_group.checkedButton().text()
+                    mat = self.param_inputs.get("Matricula").text().strip()
+                    idx = self.param_inputs.get("Index").text().strip()
+                    
+                    if modelo == "Suprema":
+                        command_str = f"01+RD+00+D]{mat}"
+                    elif modelo == "EVO BIO":
+                        command_str = f"01+RD+00+T]{mat}}}K}}B}}{idx}"
+                    elif modelo == "EVO FACE":
+                        command_str = f"01+RD+00+T]{mat}}}K}}B}}{idx}"
+                    elif modelo == "FACE CORP":
+                        command_str = f"01+RD+00+T]{mat}}}K}}B}}0"
             else:
                 for param_name, input_field in self.param_inputs.items():
                     if isinstance(input_field, list):
@@ -1693,6 +1846,12 @@ class EvoRepAuthApp(QWidget):
                         kwargs["Tipo"] = "2"
                     # Removemos formatação do ID para enviar apenas números
                     kwargs["ID"] = id_val
+                
+                # 🔹 REQUISITO: Valor opcional apenas para MENSAGEM no comando EC
+                if cmd_code == "EC":
+                    if kwargs.get("Configuração") != "MENSAGEM" and not kwargs.get("Valor"):
+                        QMessageBox.warning(self, "Erro de Validação", "O campo 'Valor' é obrigatório para esta configuração.")
+                        return
                 
                 try:
                     command_str = cmd_def.build(**kwargs)
@@ -2082,6 +2241,12 @@ class EvoRepAuthApp(QWidget):
     def disconnect(self, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
+
+        # FECHAR AUTOMATICAMENTE JANELA DE MACRO SE A CONEXÃO FOR ENCERRADA
+        if hasattr(self, f"{prefix}macro_window"):
+            macro_window = getattr(self, f"{prefix}macro_window")
+            if macro_window:
+                macro_window.close()
 
         if state["listener_worker"]:
             state["listener_worker"].stop()
