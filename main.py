@@ -110,7 +110,7 @@ QWidget {{
     font-weight: 500;
     background: transparent;
     border: none;
-    padding: 0 0 5px 1px;
+    padding: 0 0 2px 2px;
 }}
 
 /* ── TAB BUTTONS ─────────────────────────────────────── */
@@ -482,7 +482,7 @@ class NoScrollComboBox(QComboBox):
             super().keyPressEvent(event)
 
 
-APP_VERSION = "0.3"
+APP_VERSION = "0.4"
 
 
 class HeaderBar(QWidget):
@@ -518,7 +518,7 @@ class HeaderBar(QWidget):
         brand_row.setSpacing(5)
         brand_row.setContentsMargins(0, 0, 0, 0)
         brand_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
-        brand_row.addWidget(self._version_label, 0, Qt.AlignmentFlag.AlignBottom)
+        brand_row.addWidget(self._version_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         outer.addLayout(brand_row)
         outer.addSpacing(28)
@@ -565,7 +565,7 @@ class HeaderBar(QWidget):
 class _VersionBadge(QLabel):
     """Versão com Easter Egg de duplo clique."""
     def __init__(self, parent=None):
-        super().__init__(f"v{APP_VERSION}", parent)
+        super().__init__(f"{APP_VERSION}", parent)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -573,7 +573,7 @@ class _VersionBadge(QLabel):
             QTimer.singleShot(1200, self._reset)
 
     def _reset(self):
-        self.setText(f"v{APP_VERSION}")
+        self.setText(f"{APP_VERSION}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1174,62 +1174,72 @@ class ClientNetworkWorker(QThread):
             self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_sock.bind((self.ip, self.port))
             self.server_sock.listen(1)
-            self.server_sock.settimeout(None)
+            
+            while self.running:
+                self.log_signal.emit("Aguardando conexão do equipamento...")
+                self.server_sock.settimeout(2.0)
+                try:
+                    sock, addr = self.server_sock.accept()
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        self.log_signal.emit(f"Erro no accept: {e}")
+                    break
 
-            self.log_signal.emit("Aguardando conexão do equipamento...")
-            try:
-                sock, addr = self.server_sock.accept()
-                if self.server_sock:
-                    self.server_sock.close()
-                    self.server_sock = None
-            except Exception as e:
-                if self.running:
-                    self.finished_signal.emit(False, f"Erro ao aceitar conexão: {e}", None, b"")
-                else:
-                    self.finished_signal.emit(False, "Servidor parado pelo usuário.", None, b"")
-                return
+                try:
+                    self.log_signal.emit(f"Conexão recebida de {addr}. Iniciando handshake...")
 
-            self.log_signal.emit(f"Conexão recebida de {addr}. Iniciando handshake...")
+                    ra_payload = "01+RA+00"
+                    ra_packet = EvoRepProtocol.pack(ra_payload)
+                    sock.sendall(ra_packet)
 
-            ra_payload = "01+RA+00"
-            ra_packet = EvoRepProtocol.pack(ra_payload)
-            sock.sendall(ra_packet)
+                    resp_data = EvoRepProtocol.receive_full(sock)
+                    payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                    self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
 
-            resp_data = EvoRepProtocol.receive_full(sock)
-            payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
-            self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
+                    rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
+                    n, e, mod_b64 = rsa_pubkey_data
 
-            rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
-            n, e, mod_b64 = rsa_pubkey_data
+                    session_key = EvoRepCrypto.generate_aes_key()
 
-            session_key = EvoRepCrypto.generate_aes_key()
+                    session_key_b64 = base64.b64encode(session_key).decode("utf-8")
+                    credential = f"1]{self.user}]{self.password}]{session_key_b64}"
 
-            session_key_b64 = base64.b64encode(session_key).decode("utf-8")
-            credential = f"1]{self.user}]{self.password}]{session_key_b64}"
+                    encrypted = EvoRepCrypto.encrypt_credentials_with_rsa((n, e), credential)
+                    encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
 
-            encrypted = EvoRepCrypto.encrypt_credentials_with_rsa((n, e), credential)
-            encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
+                    ea_payload = f"01+EA+00+{encrypted_b64}"
+                    ea_packet = EvoRepProtocol.pack(ea_payload)
+                    sock.sendall(ea_packet)
 
-            ea_payload = f"01+EA+00+{encrypted_b64}"
-            ea_packet = EvoRepProtocol.pack(ea_payload)
-            sock.sendall(ea_packet)
+                    resp_ea = EvoRepProtocol.receive_full(sock)
+                    payload_ea = EvoRepProtocol.unpack(resp_ea).decode('utf-8', errors='ignore')
+                    self.log_signal.emit(f"Payload EA recebido: {payload_ea}")
 
-            resp_ea = EvoRepProtocol.receive_full(sock)
-            payload_ea = EvoRepProtocol.unpack(resp_ea).decode('utf-8', errors='ignore')
-            self.log_signal.emit(f"Payload EA recebido: {payload_ea}")
+                    if payload_ea.startswith("01+EA+000"):
+                        # Se sucesso, fechamos o server_sock (aceitamos apenas 1 por vez com persistência)
+                        if self.server_sock:
+                            self.server_sock.close()
+                            self.server_sock = None
+                        self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key)
+                        return
+                    elif payload_ea.startswith("01+EA+009"):
+                        self.log_signal.emit("Erro: Usuário ou senha inválidos no equipamento.")
+                        sock.close()
+                    else:
+                        self.log_signal.emit(f"Falha na autenticação (EA): {payload_ea}")
+                        sock.close()
 
-            if payload_ea.startswith("01+EA+000"):
-                self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key)
-            elif payload_ea.startswith("01+EA+009"):
-                self.finished_signal.emit(False, "Usuário ou senha inválidos.", None, b"")
-                sock.close()
-            else:
-                self.finished_signal.emit(False, f"Falha na autenticação (EA): {payload_ea}", None, b"")
-                sock.close()
+                except Exception as e:
+                    self.log_signal.emit(f"Erro no handshake (RA/EA): {e}. Retentando aguardar nova conexão...")
+                    try: sock.close()
+                    except: pass
+                    continue
 
         except Exception as e:
             if self.running:
-                self.log_signal.emit(f"Erro no modo cliente: {e}")
+                self.log_signal.emit(f"Erro fatal no servidor: {e}")
                 self.finished_signal.emit(False, str(e), None, b"")
         finally:
             if self.server_sock:
@@ -1634,7 +1644,7 @@ class EvoRepAuthApp(QWidget):
             self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
 
             # 🔹 REQUISITO: Botão Macro para F2 (Client Mode)
-            macro_btn = QPushButton("⚙  Macro")
+            macro_btn = QPushButton("Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
             conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
@@ -1653,7 +1663,7 @@ class EvoRepAuthApp(QWidget):
             conn_layout.addWidget(self.main_connect_button, 5, 0, 1, 2)
 
             # 🔹 REQUISITO: Botão Macro (F1)
-            macro_btn = QPushButton("⚙  Macro")
+            macro_btn = QPushButton("Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
             conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
@@ -2275,6 +2285,13 @@ class EvoRepAuthApp(QWidget):
             dynamic_layout.addRow("Matrícula:", input_field)
             self.param_inputs["Matricula"] = input_field
 
+            if sub_cmd_code == "ED_FACE":
+                index_field = QLineEdit("0")
+                index_field.setPlaceholderText("Index (0~7)")
+                index_field.returnPressed.connect(self.on_enter_pressed)
+                dynamic_layout.addRow("Index (0~7):", index_field)
+                self.param_inputs["Index"] = index_field
+
             tp_field = QLineEdit("")
             tp_field.setPlaceholderText("Cole o template aqui")
             tp_field.returnPressed.connect(self.on_enter_pressed)
@@ -2408,10 +2425,11 @@ class EvoRepAuthApp(QWidget):
 
                 elif cmd_code == "ED_FACE":
                     tp_val = self.param_inputs.get("TP1").text().strip()
+                    idx_val = self.param_inputs.get("Index").text().strip() if self.param_inputs.get("Index") else "0"
                     if not tp_val:
                         QMessageBox.warning(self, "Aviso", "Preencha o template.")
                         return
-                    command_str = f"01+ED+00+T]{mat_val}}}R}}B}}0}}02048{{{tp_val}"
+                    command_str = f"01+ED+00+T]{mat_val}}}R}}B}}{idx_val}}}02048{{{tp_val}"
 
                 elif cmd_code == "ED_FACE_CORP":
                     tp_val = self.param_inputs.get("TP1").text().strip()
