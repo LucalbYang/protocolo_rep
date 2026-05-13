@@ -734,7 +734,7 @@ registrar_comando(CommandDefinition(
             choices=[
                 {"label": "Cadastrar Biometria", "value": "ED_CADASTRAR"},
                 {"label": "Deletar Biometria", "value": "ED_DELETAR"},
-                {"label": "Enviar - Módulo Suprema", "value": "ED_SUPREMA"},
+                {"label": "Enviar - Módulo Suprema (Placeholder apenas. Só Base64 da para copiar e colar)", "value": "ED_SUPREMA"},
                 {"label": "Enviar - EVO Bio Azul", "value": "ED_BIO_AZUL"},
                 {"label": "Enviar - EVO Face", "value": "ED_FACE"},
                 {"label": "Enviar - Face Corp", "value": "ED_FACE_CORP"},
