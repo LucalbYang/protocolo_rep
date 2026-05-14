@@ -43,8 +43,5 @@ Orientações de operação:
 - Interação Direta: O modo manual permite o envio de sequências de caracteres customizadas para testes específicos.
 - Customização Visual: O botão de alternância de tema no cabeçalho permite ajustar a visualização conforme a preferência do operador.
 
-## Licença
-
-Este software é distribuído sob a licença MIT.
 
 Desenvolvido por Lucas C Albuquerque.
