@@ -28,12 +28,8 @@ O sistema requer Python 3.10 ou superior. As bibliotecas fundamentais são:
 
 ## Instalação
 
-1. Obtenha o código fonte do projeto:
-   git clone https://github.com/usuario/protocolo-rep.git
-   cd protocolo-rep
-
-2. Instale as dependências necessárias:
-   pip install PyQt6 pycryptodome
+Instale as dependências necessárias:
+  pip install PyQt6 pycryptodome
 
 ## Instruções de Uso
 
