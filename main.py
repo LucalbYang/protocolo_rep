@@ -482,7 +482,7 @@ class NoScrollComboBox(QComboBox):
             super().keyPressEvent(event)
 
 
-APP_VERSION = "0.4"
+APP_VERSION = "0.5"
 
 
 class HeaderBar(QWidget):
@@ -619,17 +619,18 @@ class MacroWindow(QWidget):
         self.parent_app = parent_app
         self.prefix = prefix
         self.setWindowTitle(f"Macro — {prefix.replace('_', '').upper()}")
-        self.setMinimumSize(420, 300)
+        self.setMinimumSize(360, 430)
+        self.setMaximumWidth(460)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
         # ── Gerar colaboradores ──────────────────────────────────
         group_box = QGroupBox("Gerar Colaboradores")
         group_layout = QFormLayout(group_box)
-        group_layout.setSpacing(8)
-        group_layout.setContentsMargins(12, 18, 12, 12)
+        group_layout.setSpacing(6)
+        group_layout.setContentsMargins(10, 14, 10, 10)
 
         self.count_input = QLineEdit("10")
         group_layout.addRow("Quantidade:", self.count_input)
@@ -650,8 +651,8 @@ class MacroWindow(QWidget):
         # ── Deletar colaboradores do REP ─────────────────────────
         delete_group_box = QGroupBox("Deletar Colaboradores do REP")
         delete_layout = QFormLayout(delete_group_box)
-        delete_layout.setSpacing(8)
-        delete_layout.setContentsMargins(12, 18, 12, 12)
+        delete_layout.setSpacing(6)
+        delete_layout.setContentsMargins(10, 14, 10, 10)
 
         self.delete_count_input = QLineEdit("10")
         delete_layout.addRow("Quantidade:", self.delete_count_input)
@@ -662,14 +663,22 @@ class MacroWindow(QWidget):
 
         layout.addWidget(delete_group_box)
 
-        # ── Log ──────────────────────────────────────────────────
-        log_group = QGroupBox("Status")
-        log_v = QVBoxLayout(log_group)
-        log_v.setContentsMargins(10, 18, 10, 10)
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        log_v.addWidget(self.log_output)
-        layout.addWidget(log_group)
+        # ── Status (linha única) ──────────────────────────────────
+        status_frame = QFrame()
+        status_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        status_frame.setObjectName("status_frame")
+        status_h = QHBoxLayout(status_frame)
+        status_h.setContentsMargins(10, 6, 10, 6)
+        status_h.setSpacing(6)
+        dot = QLabel("●")
+        dot.setObjectName("status_dot")
+        dot.setFixedWidth(14)
+        self.status_label = QLabel("Aguardando ação...")
+        self.status_label.setObjectName("status_text")
+        self.status_label.setWordWrap(False)
+        status_h.addWidget(dot)
+        status_h.addWidget(self.status_label, 1)
+        layout.addWidget(status_frame)
 
         # PERSISTÊNCIA: Carregar posição e tamanho salvos
         self.settings = QSettings("EvoRep", "MacroWindow")
@@ -697,7 +706,7 @@ class MacroWindow(QWidget):
         super().closeEvent(event)
 
     def clear_content(self):
-        self.log_output.clear()
+        self.status_label.setText("Aguardando ação...")
         self.count_input.setText("10")
         self.delete_count_input.setText("10")
         self.btn_delete_last.setVisible(False)
@@ -710,7 +719,7 @@ class MacroWindow(QWidget):
         self.btn_delete_rep.setEnabled(True)
 
     def log(self, msg):
-        self.log_output.append(msg)
+        self.status_label.setText(msg)
 
     def generate_employee_data(self):
         return {
@@ -1602,30 +1611,29 @@ class EvoRepAuthApp(QWidget):
         # ── Painel de Conexão ──────────────────────────────────────
         conn_group = QGroupBox("Conexão")
         conn_layout = QGridLayout(conn_group)
-        conn_layout.setContentsMargins(12, 20, 12, 12)
-        conn_layout.setSpacing(8)
+        conn_layout.setContentsMargins(10, 10, 10, 10)
+        conn_layout.setSpacing(7)
+        conn_layout.setColumnStretch(1, 1)
 
-        conn_layout.addWidget(QLabel(""), 0, 0, 1, 2)  # Spacer topo
-
-        conn_layout.addWidget(QLabel("IP:"), 1, 0)
+        conn_layout.addWidget(QLabel("IP:"), 0, 0)
         ip_val  = get_local_ip() if is_client_mode else "192.168.60.71"
         ip_input = QLineEdit(ip_val)
-        conn_layout.addWidget(ip_input, 1, 1)
+        conn_layout.addWidget(ip_input, 0, 1)
 
-        conn_layout.addWidget(QLabel("Porta:"), 2, 0)
+        conn_layout.addWidget(QLabel("Porta:"), 1, 0)
         port_input = QLineEdit("3000")
-        conn_layout.addWidget(port_input, 2, 1)
+        conn_layout.addWidget(port_input, 1, 1)
 
         if not is_f3:
-            conn_layout.addWidget(QLabel("Usuário:"), 3, 0)
+            conn_layout.addWidget(QLabel("Usuário:"), 2, 0)
             user_input = QLineEdit("teste fabrica")
-            conn_layout.addWidget(user_input, 3, 1)
+            conn_layout.addWidget(user_input, 2, 1)
 
-            conn_layout.addWidget(QLabel("Senha:"), 4, 0)
+            conn_layout.addWidget(QLabel("Senha:"), 3, 0)
             password_input = QLineEdit("111111")
             password_input.setEchoMode(QLineEdit.EchoMode.Password)
             password_input.setMaxLength(6)
-            conn_layout.addWidget(password_input, 4, 1)
+            conn_layout.addWidget(password_input, 3, 1)
 
         # 🔹 REQUISITO 2: Refatoração dos Botões da Aba F2 (Modo Cliente)
         if is_client_mode:
@@ -1638,45 +1646,45 @@ class EvoRepAuthApp(QWidget):
             client_btns_layout.setSpacing(6)
             client_btns_layout.addWidget(self.client_btn_server_control)
             client_btns_layout.addWidget(self.client_btn_client_state)
-            conn_layout.addLayout(client_btns_layout, 5, 0, 1, 2)
+            conn_layout.addLayout(client_btns_layout, 4, 0, 1, 2)
 
             self.client_btn_server_control.clicked.connect(self.on_connect_clicked)
             self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
 
             # 🔹 REQUISITO: Botão Macro para F2 (Client Mode)
-            macro_btn = QPushButton("Macro")
+            macro_btn = QPushButton("⚙  Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
-            conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
+            conn_layout.addWidget(macro_btn, 5, 0, 1, 2)
             setattr(self, f"{prefix}macro_button", macro_btn)
 
         elif is_f3:
             self.f3_connect_button = QPushButton("Conectar")
             self.f3_connect_button.setObjectName("primary_btn")
             self.f3_connect_button.clicked.connect(self.on_connect_clicked)
-            conn_layout.addWidget(self.f3_connect_button, 5, 0, 1, 2)
+            conn_layout.addWidget(self.f3_connect_button, 2, 0, 1, 2)
 
         else:
             self.main_connect_button = QPushButton("Conectar")
             self.main_connect_button.setObjectName("primary_btn")
             self.main_connect_button.clicked.connect(self.on_connect_clicked)
-            conn_layout.addWidget(self.main_connect_button, 5, 0, 1, 2)
+            conn_layout.addWidget(self.main_connect_button, 4, 0, 1, 2)
 
             # 🔹 REQUISITO: Botão Macro (F1)
-            macro_btn = QPushButton("Macro")
+            macro_btn = QPushButton("⚙  Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
-            conn_layout.addWidget(macro_btn, 6, 0, 1, 2)
+            conn_layout.addWidget(macro_btn, 5, 0, 1, 2)
             setattr(self, f"{prefix}macro_button", macro_btn)
 
-        conn_layout.setRowStretch(7, 1)
+        conn_layout.setRowStretch(6, 1)
 
         # ── Painel de Comandos ─────────────────────────────────────
         if is_f3:
             cmds_group = QGroupBox("Identificação do Equipamento")
             cmds_group_layout = QFormLayout(cmds_group)
-            cmds_group_layout.setSpacing(8)
-            cmds_group_layout.setContentsMargins(12, 20, 12, 12)
+            cmds_group_layout.setSpacing(7)
+            cmds_group_layout.setContentsMargins(10, 10, 10, 10)
 
             self.f3_rep_num_field = QLineEdit()
             self.f3_rep_num_field.setReadOnly(True)
@@ -1721,8 +1729,8 @@ class EvoRepAuthApp(QWidget):
         else:
             cmds_group = QGroupBox("Construção de Comandos")
             cmds_group_layout = QVBoxLayout(cmds_group)
-            cmds_group_layout.setContentsMargins(12, 20, 12, 12)
-            cmds_group_layout.setSpacing(8)
+            cmds_group_layout.setContentsMargins(10, 10, 10, 10)
+            cmds_group_layout.setSpacing(7)
 
             combo_layout = QHBoxLayout()
             combo_layout.setSpacing(8)
@@ -1775,14 +1783,14 @@ class EvoRepAuthApp(QWidget):
 
         sent_group = QGroupBox("String Enviada")
         sent_v = QVBoxLayout(sent_group)
-        sent_v.setContentsMargins(10, 18, 10, 10)
+        sent_v.setContentsMargins(8, 10, 8, 8)
         sent_output = QTextEdit()
         sent_output.setReadOnly(True)
         sent_v.addWidget(sent_output)
 
         received_group = QGroupBox("String Recebida")
         recv_v = QVBoxLayout(received_group)
-        recv_v.setContentsMargins(10, 18, 10, 10)
+        recv_v.setContentsMargins(8, 10, 8, 8)
         received_output = QTextEdit()
         received_output.setReadOnly(True)
         recv_v.addWidget(received_output)
@@ -1845,7 +1853,7 @@ class EvoRepAuthApp(QWidget):
 
         log_group = QGroupBox("Log de Eventos")
         log_grp_v = QVBoxLayout(log_group)
-        log_grp_v.setContentsMargins(10, 18, 10, 10)
+        log_grp_v.setContentsMargins(8, 10, 8, 8)
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
