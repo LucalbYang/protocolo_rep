@@ -9,14 +9,24 @@ import traceback
 import time
 import random
 import re
+import ctypes
 from comandos import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
                              QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
                              QComboBox, QFormLayout, QScrollArea, QCheckBox, QFrame,
                              QRadioButton, QButtonGroup)
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 # Prefer pycryptodome, fallback para cryptography se necessário.
 try:
@@ -1498,6 +1508,9 @@ class EvoRepAuthApp(QWidget):
 
         self.param_inputs = {}
 
+        self.test_mode = None
+        self.old_credentials = {}
+
         self._setup_ui()
         self.load_config()
 
@@ -1550,11 +1563,13 @@ class EvoRepAuthApp(QWidget):
         self.log_tab    = self._create_log_tab()
         self.client_tab = self._create_rep_tab(prefix="client_")
         self.f3_tab     = self._create_rep_tab(prefix="f3_")
+        self.test_tab   = self._create_test_tab()
 
         self.stacked_widget.addWidget(self.main_tab)    # Index 0
         self.stacked_widget.addWidget(self.log_tab)     # Index 1
         self.stacked_widget.addWidget(self.client_tab)  # Index 2
         self.stacked_widget.addWidget(self.f3_tab)      # Index 3
+        self.stacked_widget.addWidget(self.test_tab)    # Index 4
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -1861,6 +1876,142 @@ class EvoRepAuthApp(QWidget):
 
         log_v.addWidget(log_group)
         return log_tab
+
+    def _create_test_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
+
+        # ── Painel de Conexão ──────────────────────────────────────
+        conn_group = QGroupBox("Conexão")
+        conn_layout = QGridLayout(conn_group)
+        conn_layout.setContentsMargins(15, 15, 15, 15)
+        conn_layout.setSpacing(10)
+
+        conn_layout.addWidget(QLabel("IP:"), 0, 0)
+        self.test_ip_input = QLineEdit()
+        conn_layout.addWidget(self.test_ip_input, 0, 1)
+
+        conn_layout.addWidget(QLabel("Porta:"), 1, 0)
+        self.test_port_input = QLineEdit()
+        conn_layout.addWidget(self.test_port_input, 1, 1)
+
+        # Linkagem com F1
+        self.test_ip_input.setText(self.main_ip_input.text())
+        self.test_port_input.setText(self.main_port_input.text())
+
+        self.main_ip_input.textChanged.connect(self.test_ip_input.setText)
+        self.test_ip_input.textChanged.connect(self.main_ip_input.setText)
+        self.main_port_input.textChanged.connect(self.test_port_input.setText)
+        self.test_port_input.textChanged.connect(self.main_port_input.setText)
+
+        layout.addWidget(conn_group)
+
+        # ── Painel de Cadastrar ─────────────────────────────────────
+        cad_group = QGroupBox("Cadastrar")
+        cad_layout = QVBoxLayout(cad_group)
+        cad_layout.setContentsMargins(15, 15, 15, 15)
+        cad_layout.setSpacing(15)
+
+        self.btn_user_padrao = QPushButton("Usuário Padrão")
+        self.btn_user_padrao.setObjectName("primary_btn")
+        self.btn_user_padrao.setMinimumHeight(40)
+        self.btn_user_padrao.clicked.connect(lambda: self.on_test_button_clicked("usuario_padrao"))
+
+        self.btn_empregador = QPushButton("Empregador")
+        self.btn_empregador.setObjectName("primary_btn")
+        self.btn_empregador.setMinimumHeight(40)
+        self.btn_empregador.clicked.connect(lambda: self.on_test_button_clicked("empregador"))
+
+        self.btn_colab_teste = QPushButton("Colaborador Teste")
+        self.btn_colab_teste.setObjectName("primary_btn")
+        self.btn_colab_teste.setMinimumHeight(40)
+        self.btn_colab_teste.clicked.connect(lambda: self.on_test_button_clicked("colaborador"))
+
+        cad_layout.addWidget(self.btn_user_padrao)
+        cad_layout.addWidget(self.btn_empregador)
+        cad_layout.addWidget(self.btn_colab_teste)
+
+        layout.addWidget(cad_group)
+        layout.addStretch()
+
+        return tab
+
+    def on_test_button_clicked(self, test_type):
+        if self.tab_data["main_"]["connected"]:
+            QMessageBox.warning(self, "Testes", "Por favor, desconecte a aba F1 antes de iniciar o teste.")
+            return
+
+        self.test_mode = test_type
+        self.old_credentials = {
+            "user": self.main_user_input.text(),
+            "pass": self.main_password_input.text()
+        }
+
+        if test_type == "usuario_padrao":
+            self.main_user_input.setText("rep")
+            self.main_password_input.setText("123456")
+        elif test_type == "empregador":
+            self.main_user_input.setText("teste fabrica")
+            self.main_password_input.setText("111111")
+        elif test_type == "colaborador":
+            self.main_user_input.setText("teste fabrica")
+            self.main_password_input.setText("111111")
+
+        # Aciona conexão na aba F1
+        # Garante que o prefixo ativo seja main_ para a conexão
+        current_idx = self.stacked_widget.currentIndex()
+        self.stacked_widget.setCurrentIndex(0)
+        self.on_connect_clicked()
+        self.stacked_widget.setCurrentIndex(current_idx)
+
+    def handle_test_response(self, text):
+        msg = ""
+        success = False
+        if self.test_mode == "usuario_padrao":
+            if text == "01+ES+000+1+0":
+                msg = "Usuário Padrão Cadastrado com Sucesso"
+                success = True
+            elif text == "01+ES+000+1+23":
+                msg = "Usuário Padrão já Cadastrado Anteriormente"
+                success = True
+            else:
+                msg = "Erro ao Cadastrar"
+        elif self.test_mode == "empregador":
+            if text == "01+EE+000":
+                msg = "Empregador Cadastrado com Sucesso"
+                success = True
+            else:
+                msg = "Erro ao Cadastrar"
+        elif self.test_mode == "colaborador":
+            if text == "01+EU+000+1+0":
+                msg = "Colaborador Cadastrado com Sucesso"
+                success = True
+            else:
+                msg = "Erro ao Cadastrar"
+
+        if msg:
+            if success:
+                QMessageBox.information(self, "Teste", msg)
+            else:
+                QMessageBox.critical(self, "Teste", msg)
+
+            self.test_mode = None
+            self.disconnect("main_")
+            self.main_user_input.setText(self.old_credentials.get("user", ""))
+            self.main_password_input.setText(self.old_credentials.get("pass", ""))
+
+    def _send_raw_command(self, prefix, command_str):
+        state = self.tab_data[prefix]
+        if not state["persistent_sock"]: return
+
+        getattr(self, f"{prefix}send_button").setEnabled(False)
+        self.command_worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
+        self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+        self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
+        self.command_worker.finished_signal.connect(self.on_send_command_finished)
+        self.command_worker.start()
 
     # ──────────────────────────────────────────────────────────────────
     #  HELPERS DE ABA ATIVA  (inalterados)
@@ -2536,6 +2687,9 @@ class EvoRepAuthApp(QWidget):
         elif event.key() == Qt.Key.Key_F3:
             self.stacked_widget.setCurrentIndex(3)
             self.on_command_selected(0)
+        elif event.key() == Qt.Key.Key_F5:
+            self.stacked_widget.setCurrentIndex(4)
+            self.on_command_selected(0)
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.on_enter_pressed()
         else:
@@ -2776,6 +2930,9 @@ class EvoRepAuthApp(QWidget):
         if state["last_received_text"]: state["last_received_text"] += "\n" + text
         else: state["last_received_text"] = text
         self.update_sent_received_output(prefix)
+
+        if self.test_mode and prefix == "main_":
+            self.handle_test_response(text)
 
     def append_received_bytes(self, hex_text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
@@ -3064,10 +3221,28 @@ class EvoRepAuthApp(QWidget):
             state["listener_worker"].error_signal.connect(lambda err: self.on_listener_error(err, prefix))
             state["listener_worker"].start()
 
-            if prefix != "f3_":
+            if self.test_mode and prefix == "main_":
+                # Envia o comando correspondente ao teste
+                cmd = ""
+                if self.test_mode == "usuario_padrao":
+                    cmd = "01+ES+00+1+I[26571383063[teste fabrica[111111[525521[111111"
+                elif self.test_mode == "empregador":
+                    cmd = "01+EE+00+1]44880091000172]]EVO Sistemas Inteligentes LTDA]Rio Piquiri, 400"
+                elif self.test_mode == "colaborador":
+                    cmd = "01+EU+00+1+I[26571383063[Teste[0[2[1}4132669"
+                
+                if cmd:
+                    QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
+            
+            elif prefix != "f3_":
                 QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
 
         else:
+            if self.test_mode and prefix == "main_":
+                self.test_mode = None
+                self.main_user_input.setText(self.old_credentials.get("user", ""))
+                self.main_password_input.setText(self.old_credentials.get("pass", ""))
+
             state["connected"] = False
 
             if prefix == "main_":
@@ -3101,8 +3276,19 @@ class EvoRepAuthApp(QWidget):
 # ══════════════════════════════════════════════════════════════════════
 
 def main():
+    # Fix taskbar icon on Windows
+    if sys.platform == 'win32':
+        myappid = 'evosistemas.replink.protocolo.05'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")      # base neutra para o QSS funcionar uniformemente
+    
+    # Define o ícone da janela e da barra de tarefas
+    icon_path = resource_path("logo.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+    
     window = EvoRepAuthApp()
     window.show()
     sys.exit(app.exec())
