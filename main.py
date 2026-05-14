@@ -810,7 +810,7 @@ class MacroWindow(QWidget):
             self.start_deletion_phase()
             return
 
-        batch_size = min(20, remaining)
+        batch_size = min(10, remaining)
         command_str = f"01+RU+00+{batch_size}]{self.current_ru_index}"
         self.parent_app.send_external_command(command_str, self.prefix)
         self.log(f"Coletando CPFs... (Índice: {self.current_ru_index}, Meta: {self.target_delete_count})")
@@ -822,7 +822,7 @@ class MacroWindow(QWidget):
             return
 
         self.log(f"Coletados {len(self.delete_queue_cpfs)} CPFs. Iniciando exclusão...")
-        self.delete_chunks = [self.delete_queue_cpfs[i:i + 20] for i in range(0, len(self.delete_queue_cpfs), 20)]
+        self.delete_chunks = [self.delete_queue_cpfs[i:i + 10] for i in range(0, len(self.delete_queue_cpfs), 10)]
         self.send_next_delete_chunk()
 
     def send_next_delete_chunk(self):
@@ -1415,9 +1415,9 @@ EC_VAL_CHOICES = {
     "CON_SEGURA_W":         [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
     "RECONEXAO_IMEDIATA_W": [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
     "USAR_DNS_W":           [{"label": "H - Habilitado", "value": "H"}, {"label": "D - Desabilitado", "value": "D"}],
-    "MODO_CADASTRO[P]":     [{"label": "P - Padrão",  "value": "P"}, {"label": "D - Dinâmico", "value": "D"}],
-    "COR_SENSOR[G]":        [{"label": "G - Green",   "value": "G"}, {"label": "R - Red",      "value": "R"}, {"label": "B - Blue", "value": "B"}],
-    "TEMPLATE[P]":          [{"label": "P - Padrão",  "value": "P"}, {"label": "I - ISO",       "value": "I"}, {"label": "A - ANSI", "value": "A"}],
+    "MODO_CADASTRO":        [{"label": "P - Padrão",  "value": "P"}, {"label": "D - Dinâmico", "value": "D"}],
+    "COR_SENSOR":           [{"label": "G - Green",   "value": "G"}, {"label": "R - Red",      "value": "R"}, {"label": "B - Blue", "value": "B"}],
+    "TEMPLATE":             [{"label": "P - Padrão",  "value": "P"}, {"label": "I - ISO",       "value": "I"}, {"label": "A - ANSI", "value": "A"}],
     "VEL_SERIAL":           [{"label": "9600",   "value": "9600"},   {"label": "19200",  "value": "19200"},
                              {"label": "57600",  "value": "57600"},  {"label": "115200", "value": "115200"}],
     "TIPO_COM":             [{"label": "S - Serial",  "value": "S"}, {"label": "T - TCP",     "value": "T"}],

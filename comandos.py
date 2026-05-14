@@ -35,13 +35,19 @@ class CommandDefinition:
             # Se houver choices, validar se o valor é um dos valores permitidos (ou uma combinação válida separada por ])
             if param.choices:
                 valid_values = [c['value'] for c in param.choices]
-                # Se o valor contém ']', dividimos e validamos cada parte individualmente
-                if ']' in str(val):
+                
+                # Se o valor completo já é válido, não precisamos processar split
+                if val in valid_values:
+                    pass
+                # Se o valor contém ']', tentamos validar como uma combinação (exceto se o valor completo for o válido acima)
+                elif ']' in str(val):
                     parts = str(val).split(']')
+                    # Remove partes vazias resultantes de split no final (ex: "A]B]" -> ["A", "B", ""])
+                    parts = [p for p in parts if p]
                     for part in parts:
                         if part not in valid_values:
                             raise ValueError(f"O valor '{part}' dentro da combinação não é válido para o parâmetro '{param.name}'.")
-                elif val not in valid_values:
+                else:
                     # Tenta encontrar o valor pelo label caso o usuário tenha passado o texto do combo
                     val_by_label = next((c['value'] for c in param.choices if c['label'] == val), None)
                     if val_by_label:
@@ -159,6 +165,7 @@ registrar_comando(CommandDefinition(
                 {"label": "MENSAGEM - Mostra uma mensagem no display do equipamento", "value": "MENSAGEM"},
                 {"label": "NOBREAK - Habilita o monitoramento do nobreak do equipamento", "value": "NOBREAK"},
                 {"label": "GMT - Fuso horário no qual o equipamento está localizado", "value": "GMT"},
+                {"label": "BEEP_TECLADO - Configura o som do teclado do equipamento", "value": "BEEP_TECLADO"},
                 {"label": "NR_REP - Número do REP", "value": "NR_REP"},
                 {"label": "LEITOR_CARTAO - Tipo do leitor de cartão", "value": "LEITOR_CARTAO"},
                 {"label": "LEITOR_BIOMETRIA - Tipo do leitor de biometria", "value": "LEITOR_BIOMETRIA"},
@@ -168,9 +175,12 @@ registrar_comando(CommandDefinition(
                 {"label": "VERSAO_PRODUTO - Retorna a versão do firmware do equipamento", "value": "VERSAO_PRODUTO"},
                 {"label": "VERSAO_MEM - Retorna a versão do firmware da MRP", "value": "VERSAO_MEM"},
                 {"label": "VERSAO_PROTOCOLO - Retorna a versão do protocolo do equipamento", "value": "VERSAO_PROTOCOLO"},
+                {"label": "MODO_CADASTRO - Configura o modo de cadastro do equipamento", "value": "MODO_CADASTRO"},
+                {"label": "COR_SENSOR - Configura a cor do sensor de biometria do equipamento", "value": "COR_SENSOR"},
                 {"label": "BIO_PREVIEW - Mostra ou não a amostra de captura do equipamento facial", "value": "BIO_PREVIEW"},
                 {"label": "TEMPLATE - Retorna tipo de template da biometria", "value": "TEMPLATE"},
                 {"label": "ACORDO_SIND - Número do contrato do acordo sindical composto de 17 números", "value": "ACORDO_SIND"},
+                {"label": "TEMPO_LIB - Tempo de liberação do catraca ou porta configurado no equipamento", "value": "TEMPO_LIB"},
                 {"label": "IP - IP do equipamento.", "value": "IP"},
                 {"label": "MASC_SUBREDE - Máscara de subrede.", "value": "MASC_SUBREDE"},
                 {"label": "DNS - DNS.", "value": "DNS"},
@@ -240,10 +250,10 @@ registrar_comando(CommandDefinition(
                 {"label": "NOBREAK - Monitoramento nobreak: H (Habilitado) / D (Desabilitado)", "value": "NOBREAK"},
                 {"label": "GMT - Fuso horário (-2 a -5)", "value": "GMT"},
                 {"label": "BEEP_TECLADO - Som teclado: H (Habilitado) / D (Desabilitado)", "value": "BEEP_TECLADO"},
-                {"label": "MODO_CADASTRO[P] - P (Padrão) / D (Dinâmico)", "value": "MODO_CADASTRO[P]"},
-                {"label": "COR_SENSOR[G] - G (Green) / R (Red) / B (Blue)", "value": "COR_SENSOR[G]"},
+                {"label": "MODO_CADASTRO[P] - P (Padrão) / D (Dinâmico)", "value": "MODO_CADASTRO"},
+                {"label": "COR_SENSOR[G] - G (Green) / R (Red) / B (Blue)", "value": "COR_SENSOR"},
                 {"label": "BIO_PREVIEW - Preview facial: H (Habilitado) / D (Desabilitado)", "value": "BIO_PREVIEW"},
-                {"label": "TEMPLATE[P] - P (Padrão) / I (ISO) / A (ANSI)", "value": "TEMPLATE[P]"},
+                {"label": "TEMPLATE[P] - P (Padrão) / I (ISO) / A (ANSI)", "value": "TEMPLATE"},
                 {"label": "ACORDO_SIND - Contrato (17 dígitos)", "value": "ACORDO_SIND"},
                 {"label": "TEMPO_LIB - Tempo liberação (0 a 60)", "value": "TEMPO_LIB"},
                 {"label": "IP - IP do equipamento", "value": "IP"},
