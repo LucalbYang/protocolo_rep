@@ -1931,6 +1931,10 @@ class EvoRepAuthApp(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
 
+        # Container horizontal para as boxes superiores
+        top_boxes_layout = QHBoxLayout()
+        top_boxes_layout.setSpacing(20)
+
         # ── Painel de Conexão ──────────────────────────────────────
         conn_group = QGroupBox("Conexão")
         conn_layout = QGridLayout(conn_group)
@@ -1954,7 +1958,7 @@ class EvoRepAuthApp(QWidget):
         self.main_port_input.textChanged.connect(self.test_port_input.setText)
         self.test_port_input.textChanged.connect(self.main_port_input.setText)
 
-        layout.addWidget(conn_group)
+        top_boxes_layout.addWidget(conn_group)
 
         # ── Painel de Cadastrar ─────────────────────────────────────
         cad_group = QGroupBox("Cadastrar")
@@ -1981,7 +1985,10 @@ class EvoRepAuthApp(QWidget):
         cad_layout.addWidget(self.btn_empregador)
         cad_layout.addWidget(self.btn_colab_teste)
 
-        layout.addWidget(cad_group)
+        top_boxes_layout.addWidget(cad_group)
+        
+        # Adiciona o layout horizontal ao layout principal da aba
+        layout.addLayout(top_boxes_layout)
         layout.addStretch()
 
         return tab
