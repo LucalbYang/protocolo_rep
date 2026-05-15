@@ -1549,6 +1549,15 @@ class EvoRepAuthApp(QWidget):
         self.old_credentials = {}
         self.test_queue = []
         self.is_test_running = False
+        
+        # AFD State
+        self.afd_save_path = ""
+        self.afd_current_file = None
+        self.afd_total = 0
+        self.afd_collected = 0
+        self.afd_nsr = 1
+        self.afd_rep_num = "00000000000000001"
+        self.afd_state = None # "HEADER", "COUNT", "COLLECTING"
 
         self.test_timeout_timer = QTimer()
         self.test_timeout_timer.setSingleShot(True)
@@ -1987,11 +1996,44 @@ class EvoRepAuthApp(QWidget):
 
         top_boxes_layout.addWidget(cad_group)
         
+        # ── Painel de Extrair AFD ──────────────────────────────────
+        afd_group = QGroupBox("Extrair AFD")
+        afd_layout = QVBoxLayout(afd_group)
+        afd_layout.setContentsMargins(15, 15, 15, 15)
+        afd_layout.setSpacing(15)
+
+        self.btn_choose_afd_path = QPushButton("Escolher caminho salvação")
+        self.btn_choose_afd_path.setMinimumHeight(40)
+        self.btn_choose_afd_path.clicked.connect(self.on_choose_afd_path)
+
+        self.btn_gerar_afd = QPushButton("Gerar AFD")
+        self.btn_gerar_afd.setObjectName("primary_btn")
+        self.btn_gerar_afd.setMinimumHeight(40)
+        self.btn_gerar_afd.setEnabled(False)
+        self.btn_gerar_afd.clicked.connect(lambda: self.on_test_button_clicked("gerar_afd"))
+
+        afd_layout.addWidget(self.btn_choose_afd_path)
+        afd_layout.addWidget(self.btn_gerar_afd)
+        afd_layout.addStretch()
+
+        top_boxes_layout.addWidget(afd_group)
+
         # Adiciona o layout horizontal ao layout principal da aba
         layout.addLayout(top_boxes_layout)
         layout.addStretch()
 
         return tab
+
+    def on_choose_afd_path(self):
+        from PyQt6.QtWidgets import QFileDialog
+        last_dir = self.settings.value("afd_last_dir", os.path.expanduser("~"))
+        folder = QFileDialog.getExistingDirectory(self, "Escolher Pasta para salvar AFD", last_dir)
+        
+        if folder:
+            self.afd_save_path = folder
+            self.settings.setValue("afd_last_dir", folder)
+            self.btn_gerar_afd.setEnabled(True)
+            self.append_log(f"ABA TESTES (F5): Pasta para AFD definida: {folder}")
 
     def update_loading_animations(self):
         self.symbol_idx = (self.symbol_idx + 1) % len(self.loading_symbols)
@@ -2012,7 +2054,7 @@ class EvoRepAuthApp(QWidget):
             btn.setProperty("original_text", btn.text())
 
         # Log da ação iniciada
-        self.append_log(f"ABA TESTES (F5): Iniciando teste '{btn.property('original_text')}'...")
+        self.append_log(f"ABA TESTES (F5): Iniciando ação '{btn.property('original_text')}'...")
 
         # Bloqueia o botão IMEDIATAMENTE
         btn.setEnabled(False)
@@ -2034,8 +2076,9 @@ class EvoRepAuthApp(QWidget):
         self.is_test_running = True
         test_type, btn = self.test_queue[0]
         
-        # Inicia o timer de timeout de 5 segundos para a execução atual
-        self.test_timeout_timer.start(5000)
+        # Inicia o timer de timeout de 5 segundos para a execução atual (Exceto para AFD que é longo)
+        if test_type != "gerar_afd":
+            self.test_timeout_timer.start(5000)
 
         if self.tab_data["main_"]["connected"]:
             # Se já estiver conectado, pula o handshake e envia direto se for o mesmo usuário
@@ -2048,7 +2091,10 @@ class EvoRepAuthApp(QWidget):
                 QTimer.singleShot(500, lambda: self._start_test_connection(test_type))
             else:
                 self.test_mode = test_type # Garante que test_mode esteja setado antes de enviar
-                self._send_test_command(test_type)
+                if test_type == "gerar_afd":
+                    self.start_afd_flow()
+                else:
+                    self._send_test_command(test_type)
         else:
             self._start_test_connection(test_type)
 
@@ -2082,9 +2128,89 @@ class EvoRepAuthApp(QWidget):
             self.append_log(f"ABA TESTES (F5): Enviando comando para {test_type}...")
             QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
 
+    def start_afd_flow(self):
+        self.afd_state = "HEADER"
+        self.afd_collected = 0
+        self.afd_nsr = 1
+        self.append_log("ABA TESTES (F5): Iniciando extração de AFD...")
+        self._send_raw_command("main_", "01+RH+00")
+
+    def handle_afd_flow(self, text):
+        if self.afd_state == "HEADER":
+            if text.startswith("01+RH+000+"):
+                try:
+                    parts = text.split("+")
+                    if len(parts) >= 5:
+                        self.afd_rep_num = parts[4].strip()
+                    else:
+                        self.afd_rep_num = "00000000000000001"
+                    
+                    self.append_log(f"ABA TESTES (F5): REP Num: {self.afd_rep_num}. Buscando quantidade de registros...")
+                    
+                    # Prepara arquivo
+                    filename = f"AFD{self.afd_rep_num}L.txt"
+                    filepath = os.path.join(self.afd_save_path, filename)
+                    self.afd_current_file = open(filepath, "w", encoding="utf-8")
+                    self.afd_current_file.write("\n") # Primeira linha em branco
+                    
+                    self.afd_state = "COUNT"
+                    self._send_raw_command("main_", "01+RQ+00+R")
+                except Exception as e:
+                    self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
+            else:
+                self._finish_current_test("Erro AFD: Falha ao obter cabeçalho", "#C0392B")
+
+        elif self.afd_state == "COUNT":
+            if text.startswith("01+RQ+000+R]"):
+                try:
+                    self.afd_total = int(text.split("]")[1])
+                    self.append_log(f"ABA TESTES (F5): AFD Total: {self.afd_total} registros. Iniciando coleta...")
+                    
+                    if self.afd_total == 0:
+                        self._finish_current_test("AFD Gerado (Equipamento vazio)", "#27AE60")
+                        return
+
+                    self.afd_state = "COLLECTING"
+                    self._send_raw_command("main_", f"01+RR+00+N]50]{self.afd_nsr}")
+                except Exception as e:
+                    self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
+            else:
+                self._finish_current_test("Erro AFD: Falha ao obter contagem", "#C0392B")
+
+        elif self.afd_state == "COLLECTING":
+            if text.startswith("01+RR+000+"):
+                try:
+                    header_part, data_part = text.split("]", 1)
+                    passo = int(header_part.split("+")[-1])
+                    
+                    events = data_part.split("\n")
+                    # Remove linhas vazias se houver
+                    events = [e.strip() for e in events if e.strip()]
+                    
+                    for event in events:
+                        self.afd_current_file.write(event + "\n")
+                        self.afd_collected += 1
+                    
+                    self.afd_nsr += passo
+                    self.append_log(f"ABA TESTES (F5): Coletados {self.afd_collected}/{self.afd_total}...")
+
+                    if self.afd_collected < self.afd_total and passo > 0:
+                        self._send_raw_command("main_", f"01+RR+00+N]50]{self.afd_nsr}")
+                    else:
+                        self._finish_current_test("AFD Gerado com Sucesso", "#27AE60")
+                except Exception as e:
+                    self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
+            else:
+                self._finish_current_test("Erro AFD: Falha na coleta de eventos", "#C0392B")
+
     def _finish_current_test(self, msg, color):
         # Para o timer de timeout
         self.test_timeout_timer.stop()
+        
+        # Fecha arquivo se estiver aberto
+        if self.afd_current_file:
+            self.afd_current_file.close()
+            self.afd_current_file = None
 
         # Log do resultado
         self.append_log(f"ABA TESTES (F5): {msg}")
@@ -2118,6 +2244,10 @@ class EvoRepAuthApp(QWidget):
             self._finish_current_test("Erro ao Cadastrar", "#C0392B")
 
     def handle_test_response(self, text):
+        if self.test_mode == "gerar_afd":
+            self.handle_afd_flow(text)
+            return
+
         msg = ""
         color = "#C0392B" # Vermelho padrão (Erro)
         
@@ -3365,17 +3495,20 @@ class EvoRepAuthApp(QWidget):
             state["listener_worker"].start()
 
             if self.test_mode and prefix == "main_":
-                # Envia o comando correspondente ao teste
-                cmd = ""
-                if self.test_mode == "usuario_padrao":
-                    cmd = "01+ES+00+1+I[26571383063[teste fabrica[111111[525521[111111"
-                elif self.test_mode == "empregador":
-                    cmd = "01+EE+00+1]44880091000172]]EVO Sistemas Inteligentes LTDA]Rio Piquiri, 400"
-                elif self.test_mode == "colaborador":
-                    cmd = "01+EU+00+1+I[26571383063[Teste[0[2[1}4132669"
-                
-                if cmd:
-                    QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
+                if self.test_mode == "gerar_afd":
+                    QTimer.singleShot(500, self.start_afd_flow)
+                else:
+                    # Envia o comando correspondente ao teste
+                    cmd = ""
+                    if self.test_mode == "usuario_padrao":
+                        cmd = "01+ES+00+1+I[26571383063[teste fabrica[111111[525521[111111"
+                    elif self.test_mode == "empregador":
+                        cmd = "01+EE+00+1]44880091000172]]EVO Sistemas Inteligentes LTDA]Rio Piquiri, 400"
+                    elif self.test_mode == "colaborador":
+                        cmd = "01+EU+00+1+I[26571383063[Teste[0[2[1}4132669"
+                    
+                    if cmd:
+                        QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
             
             elif prefix != "f3_":
                 QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
