@@ -492,7 +492,44 @@ class NoScrollComboBox(QComboBox):
             super().keyPressEvent(event)
 
 
-APP_VERSION = "0.5"
+class NotificationCard(QWidget):
+    """Card temporário que aparece no canto inferior direito."""
+    def __init__(self, parent, message, color="#2ECC71"):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(300)
+        self.setFixedHeight(80)
+        
+        layout = QVBoxLayout(self)
+        self.label = QLabel(message)
+        self.label.setWordWrap(True)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; background: transparent;")
+        layout.addWidget(self.label)
+        
+        self.setStyleSheet(f"background-color: {color}; border-radius: 10px;")
+        
+        # Posicionamento inicial (será ajustado no show)
+        self.move_to_corner()
+        
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.close)
+        self.timer.start(3000) # 3 segundos
+        
+        self.show()
+
+    def move_to_corner(self):
+        if self.parentWidget():
+            p_rect = self.parentWidget().rect()
+            self.move(p_rect.width() - self.width() - 20, p_rect.height() - self.height() - 20)
+
+    def resizeEvent(self, event):
+        self.move_to_corner()
+        super().resizeEvent(event)
+
+
+APP_VERSION = "0.6"
 
 
 class HeaderBar(QWidget):
@@ -1510,6 +1547,17 @@ class EvoRepAuthApp(QWidget):
 
         self.test_mode = None
         self.old_credentials = {}
+        self.test_queue = []
+        self.is_test_running = False
+
+        self.test_timeout_timer = QTimer()
+        self.test_timeout_timer.setSingleShot(True)
+        self.test_timeout_timer.timeout.connect(self.on_test_timeout)
+
+        self.loading_timer = QTimer()
+        self.loading_timer.timeout.connect(self.update_loading_animations)
+        self.loading_symbols = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self.symbol_idx = 0
 
         self._setup_ui()
         self.load_config()
@@ -1938,11 +1986,66 @@ class EvoRepAuthApp(QWidget):
 
         return tab
 
+    def update_loading_animations(self):
+        self.symbol_idx = (self.symbol_idx + 1) % len(self.loading_symbols)
+        symbol = self.loading_symbols[self.symbol_idx]
+        
+        # Atualiza todos os botões que estão na fila (test_queue contém tuplas (tipo, btn))
+        for _, btn in self.test_queue:
+            orig = btn.property("original_text")
+            if orig:
+                btn.setText(f"{symbol} {orig}")
+
     def on_test_button_clicked(self, test_type):
-        if self.tab_data["main_"]["connected"]:
-            QMessageBox.warning(self, "Testes", "Por favor, desconecte a aba F1 antes de iniciar o teste.")
+        btn = self.sender()
+        if not btn: return
+        
+        # Salva o texto original para restauração posterior
+        if not btn.property("original_text"):
+            btn.setProperty("original_text", btn.text())
+
+        # Log da ação iniciada
+        self.append_log(f"ABA TESTES (F5): Iniciando teste '{btn.property('original_text')}'...")
+
+        # Bloqueia o botão IMEDIATAMENTE
+        btn.setEnabled(False)
+
+        # Inicia a animação se não estiver rodando
+        if not self.loading_timer.isActive():
+            self.loading_timer.start(100)
+
+        self.test_queue.append((test_type, btn))
+        
+        if not self.is_test_running:
+            self.run_next_test()
+
+    def run_next_test(self):
+        if not self.test_queue:
+            self.is_test_running = False
             return
 
+        self.is_test_running = True
+        test_type, btn = self.test_queue[0]
+        
+        # Inicia o timer de timeout de 5 segundos para a execução atual
+        self.test_timeout_timer.start(5000)
+
+        if self.tab_data["main_"]["connected"]:
+            # Se já estiver conectado, pula o handshake e envia direto se for o mesmo usuário
+            current_user = self.main_user_input.text()
+            target_user = "rep" if test_type == "usuario_padrao" else "teste fabrica"
+            
+            if current_user != target_user:
+                self.append_log(f"ABA TESTES (F5): Trocando usuário para {target_user}...")
+                self.disconnect("main_")
+                QTimer.singleShot(500, lambda: self._start_test_connection(test_type))
+            else:
+                self.test_mode = test_type # Garante que test_mode esteja setado antes de enviar
+                self._send_test_command(test_type)
+        else:
+            self._start_test_connection(test_type)
+
+    def _start_test_connection(self, test_type):
         self.test_mode = test_type
         self.old_credentials = {
             "user": self.main_user_input.text(),
@@ -1952,55 +2055,89 @@ class EvoRepAuthApp(QWidget):
         if test_type == "usuario_padrao":
             self.main_user_input.setText("rep")
             self.main_password_input.setText("123456")
-        elif test_type == "empregador":
-            self.main_user_input.setText("teste fabrica")
-            self.main_password_input.setText("111111")
-        elif test_type == "colaborador":
+        else:
             self.main_user_input.setText("teste fabrica")
             self.main_password_input.setText("111111")
 
         # Aciona conexão na aba F1
-        # Garante que o prefixo ativo seja main_ para a conexão
-        current_idx = self.stacked_widget.currentIndex()
-        self.stacked_widget.setCurrentIndex(0)
         self.on_connect_clicked()
-        self.stacked_widget.setCurrentIndex(current_idx)
+
+    def _send_test_command(self, test_type):
+        cmd = ""
+        if test_type == "usuario_padrao":
+            cmd = "01+ES+00+1+I[26571383063[teste fabrica[111111[525521[111111"
+        elif test_type == "empregador":
+            cmd = "01+EE+00+1]44880091000172]]EVO Sistemas Inteligentes LTDA]Rio Piquiri, 400"
+        elif test_type == "colaborador":
+            cmd = "01+EU+00+1+I[26571383063[Teste[0[2[1}4132669"
+        
+        if cmd:
+            self.append_log(f"ABA TESTES (F5): Enviando comando para {test_type}...")
+            QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
+
+    def _finish_current_test(self, msg, color):
+        # Para o timer de timeout
+        self.test_timeout_timer.stop()
+
+        # Log do resultado
+        self.append_log(f"ABA TESTES (F5): {msg}")
+
+        # Mostra o card de notificação com a cor específica
+        if msg:
+            NotificationCard(self, msg, color)
+        
+        # Restaura o botão correspondente
+        if self.test_queue:
+            test_type, btn = self.test_queue.pop(0)
+            orig = btn.property("original_text")
+            btn.setText(orig)
+            btn.setEnabled(True)
+            
+            # Se a fila esvaziou totalmente, para a animação
+            if not self.test_queue:
+                self.loading_timer.stop()
+
+        self.test_mode = None
+        self.disconnect("main_")
+        self.main_user_input.setText(self.old_credentials.get("user", ""))
+        self.main_password_input.setText(self.old_credentials.get("pass", ""))
+        
+        # Próximo teste na fila
+        QTimer.singleShot(500, self.run_next_test)
+
+    def on_test_timeout(self):
+        if self.is_test_running:
+            self.append_log("ABA TESTES (F5): Tempo esgotado (5s).")
+            self._finish_current_test("Erro ao Cadastrar", "#C0392B")
 
     def handle_test_response(self, text):
         msg = ""
-        success = False
+        color = "#C0392B" # Vermelho padrão (Erro)
+        
         if self.test_mode == "usuario_padrao":
             if text == "01+ES+000+1+0":
                 msg = "Usuário Padrão Cadastrado com Sucesso"
-                success = True
+                color = "#27AE60" # Verde Sucesso
             elif text == "01+ES+000+1+23":
                 msg = "Usuário Padrão já Cadastrado Anteriormente"
-                success = True
+                color = "#E67E22" # Laranja (Já cadastrado)
             else:
                 msg = "Erro ao Cadastrar"
         elif self.test_mode == "empregador":
             if text == "01+EE+000":
                 msg = "Empregador Cadastrado com Sucesso"
-                success = True
+                color = "#27AE60"
             else:
                 msg = "Erro ao Cadastrar"
         elif self.test_mode == "colaborador":
             if text == "01+EU+000+1+0":
                 msg = "Colaborador Cadastrado com Sucesso"
-                success = True
+                color = "#27AE60"
             else:
                 msg = "Erro ao Cadastrar"
 
         if msg:
-            if success:
-                QMessageBox.information(self, "Teste", msg)
-            else:
-                QMessageBox.critical(self, "Teste", msg)
-
-            self.test_mode = None
-            self.disconnect("main_")
-            self.main_user_input.setText(self.old_credentials.get("user", ""))
-            self.main_password_input.setText(self.old_credentials.get("pass", ""))
+            self._finish_current_test(msg, color)
 
     def _send_raw_command(self, prefix, command_str):
         state = self.tab_data[prefix]
@@ -3016,7 +3153,6 @@ class EvoRepAuthApp(QWidget):
             return
 
         self.save_config()
-        self.log_output.clear()
 
         if prefix == "main_":
             self.main_connect_button.setEnabled(False)
@@ -3239,9 +3375,8 @@ class EvoRepAuthApp(QWidget):
 
         else:
             if self.test_mode and prefix == "main_":
-                self.test_mode = None
-                self.main_user_input.setText(self.old_credentials.get("user", ""))
-                self.main_password_input.setText(self.old_credentials.get("pass", ""))
+                self._finish_current_test("Erro ao Cadastrar", "#C0392B")
+                return
 
             state["connected"] = False
 
