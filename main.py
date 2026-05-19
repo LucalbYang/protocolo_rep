@@ -10,6 +10,7 @@ import time
 import random
 import re
 import ctypes
+from datetime import datetime
 from comandos import COMMANDS_REGISTRY
 
 from PyQt6.QtCore import QThread, pyqtSignal, QSettings, QTimer, Qt, QEvent
@@ -529,7 +530,7 @@ class NotificationCard(QWidget):
         super().resizeEvent(event)
 
 
-APP_VERSION = "0.6"
+APP_VERSION = "0.7.0"
 
 
 class HeaderBar(QWidget):
@@ -772,7 +773,7 @@ class MacroWindow(QWidget):
         return {
             "id": generate_cpf(),
             "nome": generate_random_name(),
-            "matricula": "".join(random.choices("0123456789", k=5))
+            "matricula": "".join(random.choices("0123456789", k=6))
         }
 
     def on_bulk_clicked(self):
@@ -1524,6 +1525,17 @@ class EvoRepAuthApp(QWidget):
                 "last_received_text": "",
                 "last_received_bytes": "",
                 "reconnect_count": 0,
+            },
+            "test_": {
+                "persistent_sock": None,
+                "session_key": None,
+                "connected": False,
+                "worker": None,
+                "listener_worker": None,
+                "last_sent_text": "",
+                "last_sent_bytes": "",
+                "last_received_text": "",
+                "last_received_bytes": "",
             }
         }
 
@@ -1557,8 +1569,18 @@ class EvoRepAuthApp(QWidget):
         self.afd_collected = 0
         self.afd_nsr = 1
         self.afd_rep_num = "00000000000000001"
-        self.afd_state = None # "HEADER", "COUNT", "COLLECTING"
-
+        self.afd_rep_model = ""
+        self.afd_state = None # "HEADER", "MODEL", "EMPLOYER", "COUNT", "COLLECTING"
+        self.afd_emp_id = ""
+        self.afd_emp_type = "1"
+        self.afd_emp_name = ""
+        self.afd_first_date = ""
+        self.afd_last_date = ""
+        self.afd_count_2 = 0
+        self.afd_count_3 = 0
+        self.afd_count_4 = 0
+        self.afd_count_5 = 0
+        self.afd_count_6 = 0
         self.test_timeout_timer = QTimer()
         self.test_timeout_timer.setSingleShot(True)
         self.test_timeout_timer.timeout.connect(self.on_test_timeout)
@@ -1867,6 +1889,10 @@ class EvoRepAuthApp(QWidget):
         received_output.setReadOnly(True)
         recv_v.addWidget(received_output)
 
+        if is_f3:
+            sent_group.setVisible(False)
+            received_group.setVisible(False)
+
         log_row.addWidget(sent_group)
         log_row.addWidget(received_group)
         layout.addLayout(log_row)
@@ -1893,6 +1919,8 @@ class EvoRepAuthApp(QWidget):
             password_input.returnPressed.connect(self.on_enter_pressed)
             user_input.returnPressed.connect(self.on_enter_pressed)
 
+        setattr(self, f"{prefix}sent_group",            sent_group)
+        setattr(self, f"{prefix}received_group",        received_group)
         setattr(self, f"{prefix}command_combo",         command_combo)
         setattr(self, f"{prefix}dynamic_layout",        dynamic_layout)
         setattr(self, f"{prefix}send_button",           send_button)
@@ -2128,37 +2156,141 @@ class EvoRepAuthApp(QWidget):
             self.append_log(f"ABA TESTES (F5): Enviando comando para {test_type}...")
             QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
 
+    def _calculate_afd_crc16(self, data):
+        """Calcula o CRC-16 (Polynomial 0x8005/0xA001) para o cabeçalho do AFD."""
+        crc = 0xFFFF
+        if isinstance(data, str):
+            data_bytes = data.encode('ascii', errors='ignore')
+        else:
+            data_bytes = data
+
+        for byte in data_bytes:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x0001:
+                    crc = (crc >> 1) ^ 0xA001
+                else:
+                    crc >>= 1
+        return f"{crc:04X}"
+
+    def _generate_afd_header(self):
+        # 001-009: 000000000
+        header = "000000000"
+        # 010-010: 1 (Tipo do registro)
+        header += "1"
+        # 011-011: emp_type ("1": CNPJ; "2": CPF)
+        header += str(self.afd_emp_type)
+        # 012-025: CNPJ ou CPF do empregador (14 chars)
+        header += self.afd_emp_id.ljust(14)[:14]
+        # 026-039: Em branco (14 chars)
+        header += " " * 14
+        # 040-189: Razão social ou nome do empregador (150 chars)
+        header += self.afd_emp_name.ljust(150)[:150]
+        # 190-206: Número do rep (17 chars)
+        header += self.afd_rep_num.ljust(17)[:17]
+        # 207-216: Data inicial (AAAA-MM-DD)
+        header += self.afd_first_date.ljust(10)[:10]
+        # 217-226: Data final (AAAA-MM-DD)
+        header += self.afd_last_date.ljust(10)[:10]
+        # 227-250: Data e hora da geração (AAAA-MM-DDThh:mm:ss-0300)
+        gen_dt = datetime.now().strftime("%Y-%m-%dT%H:%M:%S-0300")
+        header += gen_dt.ljust(24)[:24]
+        # 251-253: Versão 003
+        header += "003"
+        # 254-254: Fabricante tipo 1 (CNPJ)
+        header += "1"
+        # 255-268: CNPJ Fabricante
+        header += "44880091000172".ljust(14)[:14]
+        # 269-298: Modelo (30 chars)
+        header += self.afd_rep_model.ljust(30)[:30]
+        
+        # CRC16 do registro (primeiros 298 caracteres)
+        crc = self._calculate_afd_crc16(header)
+        header += crc
+        
+        return header
+
     def start_afd_flow(self):
         self.afd_state = "HEADER"
         self.afd_collected = 0
         self.afd_nsr = 1
+        self.afd_first_date = ""
+        self.afd_last_date = ""
+        self.afd_emp_id = ""
+        self.afd_emp_type = "1"
+        self.afd_emp_name = ""
+        self.afd_rep_model = ""
+        self.afd_count_2 = 0
+        self.afd_count_3 = 0
+        self.afd_count_4 = 0
+        self.afd_count_5 = 0
+        self.afd_count_6 = 0
         self.append_log("ABA TESTES (F5): Iniciando extração de AFD...")
-        self._send_raw_command("main_", "01+RH+00")
+        self._send_raw_command("main_", "01+RC+00+NR_REP")
 
     def handle_afd_flow(self, text):
         if self.afd_state == "HEADER":
-            if text.startswith("01+RH+000+"):
+            if text.startswith("01+RC+000+NR_REP["):
                 try:
-                    parts = text.split("+")
-                    if len(parts) >= 5:
-                        self.afd_rep_num = parts[4].strip()
+                    # Extrai o número de 17 dígitos dentro dos colchetes
+                    match = re.search(r"NR_REP\[(\d{17})\]", text)
+                    if match:
+                        self.afd_rep_num = match.group(1)
                     else:
                         self.afd_rep_num = "00000000000000001"
                     
-                    self.append_log(f"ABA TESTES (F5): REP Num: {self.afd_rep_num}. Buscando quantidade de registros...")
+                    self.append_log(f"ABA TESTES (F5): REP Num: {self.afd_rep_num}. Coletando modelo...")
                     
-                    # Prepara arquivo
+                    self.afd_state = "MODEL"
+                    self._send_raw_command("main_", "01+RC+00+MODELO")
+                except Exception as e:
+                    self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
+            else:
+                self._finish_current_test("Erro AFD: Falha ao obter cabeçalho", "#C0392B")
+
+        elif self.afd_state == "MODEL":
+            if text.startswith("01+RC+000+MODELO["):
+                try:
+                    match = re.search(r"MODELO\[(.*?)\]", text)
+                    if match:
+                        self.afd_rep_model = match.group(1)
+                    else:
+                        self.afd_rep_model = "EVO REP-C"
+                    
+                    self.append_log(f"ABA TESTES (F5): Modelo: {self.afd_rep_model}. Coletando dados do empregador...")
+                    
+                    # Prepara arquivo reservando espaço para o cabeçalho (302 bytes + \n)
                     filename = f"AFD{self.afd_rep_num}L.txt"
                     filepath = os.path.join(self.afd_save_path, filename)
-                    self.afd_current_file = open(filepath, "w", encoding="utf-8")
-                    self.afd_current_file.write("\n") # Primeira linha em branco
+                    self.afd_last_filepath = filepath
+                    self.afd_current_file = open(filepath, "w", encoding="utf-8", newline='\n')
+                    self.afd_current_file.write(" " * 302 + "\n")
                     
+                    self.afd_state = "EMPLOYER"
+                    self._send_raw_command("main_", "01+RE+00")
+                except Exception as e:
+                    self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
+            else:
+                self._finish_current_test("Erro AFD: Falha ao obter modelo", "#C0392B")
+
+        elif self.afd_state == "EMPLOYER":
+            if text.startswith("01+RE+000+"):
+                try:
+                    parts = text.split("]")
+                    if len(parts) >= 4:
+                        # 01+RE+000+1](CNPJouCPF)]              ]Razão social...]Local
+                        self.afd_emp_id = parts[1].strip()
+                        self.afd_emp_name = parts[3].strip()
+                        # Detecta se é CPF (11) ou CNPJ (14)
+                        self.afd_emp_type = "1" if len(self.afd_emp_id) == 14 else "2"
+                    
+                    self.append_log(f"ABA TESTES (F5): Empregador: {self.afd_emp_name}. Buscando quantidade de registros...")
                     self.afd_state = "COUNT"
                     self._send_raw_command("main_", "01+RQ+00+R")
                 except Exception as e:
                     self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
             else:
-                self._finish_current_test("Erro AFD: Falha ao obter cabeçalho", "#C0392B")
+                self._finish_current_test("Erro AFD: Falha ao obter dados do empregador", "#C0392B")
 
         elif self.afd_state == "COUNT":
             if text.startswith("01+RQ+000+R]"):
@@ -2171,7 +2303,7 @@ class EvoRepAuthApp(QWidget):
                         return
 
                     self.afd_state = "COLLECTING"
-                    self._send_raw_command("main_", f"01+RR+00+N]50]{self.afd_nsr}")
+                    self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
                 except Exception as e:
                     self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
             else:
@@ -2188,6 +2320,22 @@ class EvoRepAuthApp(QWidget):
                     events = [e.strip() for e in events if e.strip()]
                     
                     for event in events:
+                        # Captura data inicial e final (posições 11-20 -> index 10-20)
+                        if len(event) >= 20:
+                            dt = event[10:20]
+                            if not self.afd_first_date:
+                                self.afd_first_date = dt
+                            self.afd_last_date = dt
+                        
+                        # Contagem de tipos para o trailer (Tipo 2 ao 6)
+                        if len(event) >= 10:
+                            tipo = event[9] # 10º caractere
+                            if tipo == '2': self.afd_count_2 += 1
+                            elif tipo == '3': self.afd_count_3 += 1
+                            elif tipo == '4': self.afd_count_4 += 1
+                            elif tipo == '5': self.afd_count_5 += 1
+                            elif tipo == '6': self.afd_count_6 += 1
+
                         self.afd_current_file.write(event + "\n")
                         self.afd_collected += 1
                     
@@ -2195,7 +2343,7 @@ class EvoRepAuthApp(QWidget):
                     self.append_log(f"ABA TESTES (F5): Coletados {self.afd_collected}/{self.afd_total}...")
 
                     if self.afd_collected < self.afd_total and passo > 0:
-                        self._send_raw_command("main_", f"01+RR+00+N]50]{self.afd_nsr}")
+                        self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
                     else:
                         self._finish_current_test("AFD Gerado com Sucesso", "#27AE60")
                 except Exception as e:
@@ -2209,8 +2357,25 @@ class EvoRepAuthApp(QWidget):
         
         # Fecha arquivo se estiver aberto
         if self.afd_current_file:
+            # Grava o trailer se o AFD foi gerado com sucesso
+            if msg == "AFD Gerado com Sucesso":
+                trailer = f"999999999{self.afd_count_2:09d}{self.afd_count_3:09d}{self.afd_count_4:09d}{self.afd_count_5:09d}{self.afd_count_6:09d}0000000009"
+                trailer = trailer.ljust(64, ' ')
+                self.afd_current_file.write(trailer + "\n")
+
             self.afd_current_file.close()
             self.afd_current_file = None
+
+        # Se AFD gerado com sucesso, grava o cabeçalho final no topo reservado
+        if msg == "AFD Gerado com Sucesso" and hasattr(self, 'afd_last_filepath'):
+            try:
+                header = self._generate_afd_header()
+                # Reabre o arquivo em modo leitura/escrita para gravar o cabeçalho no seek(0)
+                with open(self.afd_last_filepath, "r+", encoding="utf-8", newline='\n') as f:
+                    f.seek(0)
+                    f.write(header)
+            except Exception as e:
+                self.append_log(f"ABA TESTES (F5): Erro ao gravar cabeçalho final: {e}")
 
         # Log do resultado
         self.append_log(f"ABA TESTES (F5): {msg}")
@@ -2218,6 +2383,13 @@ class EvoRepAuthApp(QWidget):
         # Mostra o card de notificação com a cor específica
         if msg:
             NotificationCard(self, msg, color)
+            
+            # REQUISITO: Se AFD gerado com sucesso, abre o arquivo
+            if msg == "AFD Gerado com Sucesso" and hasattr(self, 'afd_last_filepath'):
+                try:
+                    os.startfile(self.afd_last_filepath)
+                except:
+                    pass
         
         # Restaura o botão correspondente
         if self.test_queue:
@@ -2296,6 +2468,7 @@ class EvoRepAuthApp(QWidget):
         if idx == 0: return "main_"
         if idx == 2: return "client_"
         if idx == 3: return "f3_"
+        if idx == 4: return "test_"
         return "main_"
 
     def _get_widget(self, name):
@@ -2308,6 +2481,10 @@ class EvoRepAuthApp(QWidget):
 
     def on_command_selected(self, index):
         prefix = self._get_active_prefix()
+        # REQUISITO: A aba de testes não usa construção dinâmica de comandos
+        if prefix == "test_":
+            return
+
         dynamic_layout    = getattr(self, f"{prefix}dynamic_layout")
         command_combo     = getattr(self, f"{prefix}command_combo")
         cmd_description_label = getattr(self, f"{prefix}cmd_description_label")
@@ -2773,6 +2950,8 @@ class EvoRepAuthApp(QWidget):
 
     def on_send_command_clicked(self):
         prefix = self._get_active_prefix()
+        if prefix == "test_":
+            prefix = "main_"
         state  = self.tab_data[prefix]
 
         if not state["persistent_sock"]:
@@ -2959,11 +3138,16 @@ class EvoRepAuthApp(QWidget):
             self.stacked_widget.setCurrentIndex(2)
             self.on_command_selected(0)
         elif event.key() == Qt.Key.Key_F3:
-            self.stacked_widget.setCurrentIndex(3)
-            self.on_command_selected(0)
+            if self.stacked_widget.currentIndex() == 3:
+                # Toggle visibilidade das boxes de string na aba F3
+                is_vis = not self.f3_sent_group.isVisible()
+                self.f3_sent_group.setVisible(is_vis)
+                self.f3_received_group.setVisible(is_vis)
+            else:
+                self.stacked_widget.setCurrentIndex(3)
+                self.on_command_selected(0)
         elif event.key() == Qt.Key.Key_F5:
             self.stacked_widget.setCurrentIndex(4)
-            self.on_command_selected(0)
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.on_enter_pressed()
         else:
@@ -2971,6 +3155,10 @@ class EvoRepAuthApp(QWidget):
 
     def on_enter_pressed(self):
         prefix = self._get_active_prefix()
+        # REQUISITO: Ignora Enter na aba F5 (test_)
+        if prefix == "test_":
+            return
+
         if prefix == "main_":
             if self.main_connect_button.text() in ("Conectar", ) and self.main_connect_button.isEnabled():
                 self.on_connect_clicked()
@@ -2996,7 +3184,9 @@ class EvoRepAuthApp(QWidget):
 
     def validate_password_input(self):
         prefix = self._get_active_prefix()
-        if prefix == "f3_": return
+        # REQUISITO: Ignora validação na aba F5 e F3 (F3 não tem senha, F5 usa a da F1)
+        if prefix in ("f3_", "test_"): return
+        
         state          = self.tab_data[prefix]
         password_input = self._get_widget("password_input")
         password       = password_input.text()
@@ -3010,6 +3200,8 @@ class EvoRepAuthApp(QWidget):
 
     def set_inputs_enabled(self, enabled: bool, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
+        if prefix == "test_": return
+
         getattr(self, f"{prefix}ip_input").setEnabled(enabled)
         getattr(self, f"{prefix}port_input").setEnabled(enabled)
         if prefix != "f3_":
@@ -3057,6 +3249,11 @@ class EvoRepAuthApp(QWidget):
         self.settings.setValue("active_tab", self.stacked_widget.currentIndex())
 
         prefix     = self._get_active_prefix()
+        # REQUISITO: Se estiver na aba F5, não tenta salvar campos locais (IP/Porta já linkados com F1)
+        if prefix == "test_":
+            self.settings.sync()
+            return
+
         ip_input   = getattr(self, f"{prefix}ip_input")
         port_input = getattr(self, f"{prefix}port_input")
 
@@ -3072,6 +3269,11 @@ class EvoRepAuthApp(QWidget):
         if prefix != "f3_":
             self.settings.setValue('user',     getattr(self, f"{prefix}user_input").text())
             self.settings.setValue('password', getattr(self, f"{prefix}password_input").text())
+
+        self.settings.setValue('dark_mode',           self.dark_mode)
+        self.settings.setValue('manual_history',      self.manual_history)
+        self.settings.setValue('last_manual_command', self.last_manual_command)
+        self.settings.sync()
 
         self.settings.setValue('dark_mode',           self.dark_mode)
         self.settings.setValue('manual_history',      self.manual_history)
@@ -3112,6 +3314,11 @@ class EvoRepAuthApp(QWidget):
         state = self.tab_data[prefix]
         if state["last_sent_text"]: state["last_sent_text"] += "\n" + text
         else: state["last_sent_text"] = text
+
+        # Limita o buffer visual para evitar crash de RAM
+        if len(state["last_sent_text"]) > 20000:
+            state["last_sent_text"] = "..." + state["last_sent_text"][-20000:]
+
         self.update_sent_received_output(prefix)
 
     def append_sent_bytes(self, hex_text: str, prefix=None):
@@ -3119,6 +3326,11 @@ class EvoRepAuthApp(QWidget):
         state = self.tab_data[prefix]
         if state["last_sent_bytes"]: state["last_sent_bytes"] += "\n" + hex_text
         else: state["last_sent_bytes"] = hex_text
+
+        # Limita o buffer visual para evitar crash de RAM
+        if len(state["last_sent_bytes"]) > 20000:
+            state["last_sent_bytes"] = "..." + state["last_sent_bytes"][-20000:]
+
         self.update_sent_received_output(prefix)
 
     # ──────────────────────────────────────────────────────────────────
@@ -3201,18 +3413,28 @@ class EvoRepAuthApp(QWidget):
                     self.append_log("F3: Erro 015 persistente após 3 tentativas. Reconexão automática interrompida.")
                     state["reconnect_count"] = 0
 
-        if state["last_received_text"]: state["last_received_text"] += "\n" + text
-        else: state["last_received_text"] = text
-        self.update_sent_received_output(prefix)
-
         if self.test_mode and prefix == "main_":
             self.handle_test_response(text)
+
+        if state["last_received_text"]: state["last_received_text"] += "\n" + text
+        else: state["last_received_text"] = text
+
+        # Limita o buffer visual para evitar crash de RAM em transferências gigantes (ex: AFD)
+        if len(state["last_received_text"]) > 20000:
+            state["last_received_text"] = "..." + state["last_received_text"][-20000:]
+
+        self.update_sent_received_output(prefix)
 
     def append_received_bytes(self, hex_text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
         if state["last_received_bytes"]: state["last_received_bytes"] += "\n" + hex_text
         else: state["last_received_bytes"] = hex_text
+
+        # Limita o buffer visual para evitar crash de RAM
+        if len(state["last_received_bytes"]) > 20000:
+            state["last_received_bytes"] = "..." + state["last_received_bytes"][-20000:]
+
         self.update_sent_received_output(prefix)
 
     # ──────────────────────────────────────────────────────────────────
@@ -3221,7 +3443,7 @@ class EvoRepAuthApp(QWidget):
 
     def on_toggle_display_mode(self):
         self.show_bytes = not self.show_bytes
-        btn_text = "📄  Exibir em string" if self.show_bytes else "🔢  Exibir em bytes"
+        btn_text = "Exibir em string" if self.show_bytes else "Exibir em bytes"
         self.main_toggle_mode_button.setText(btn_text)
         self.client_toggle_mode_button.setText(btn_text)
         self.f3_toggle_mode_button.setText(btn_text)
@@ -3237,10 +3459,14 @@ class EvoRepAuthApp(QWidget):
     def on_send_command_finished(self, success: bool, message: str):
         self.append_log(message)
         prefix = self._get_active_prefix()
+        if prefix == "test_":
+            prefix = "main_"
         getattr(self, f"{prefix}send_button").setEnabled(True)
 
     def on_clear_clicked(self):
         prefix = self._get_active_prefix()
+        if prefix == "test_":
+            prefix = "main_"
         state  = self.tab_data[prefix]
         state["last_sent_text"]     = ""
         state["last_sent_bytes"]    = ""
@@ -3255,6 +3481,8 @@ class EvoRepAuthApp(QWidget):
 
     def on_connect_clicked(self):
         prefix = self._get_active_prefix()
+        if prefix == "test_":
+            prefix = "main_"
         state  = self.tab_data[prefix]
 
         if state["connected"]:
