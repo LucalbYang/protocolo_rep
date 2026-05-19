@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QTextEdit, QWidget, QStackedWidget,
                              QGroupBox, QVBoxLayout, QHBoxLayout, QMessageBox,
                              QComboBox, QFormLayout, QScrollArea, QCheckBox, QFrame,
-                             QRadioButton, QButtonGroup)
+                             QRadioButton, QButtonGroup, QProgressBar)
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -473,7 +473,24 @@ QFrame[frameShape="4"], QFrame[frameShape="5"] {{
     background-color: {border};
     max-height: 1px;
 }}
+
+/* ── PROGRESS BAR ────────────────────────────────────── */
+QProgressBar {{
+    background-color: {surface2};
+    color: {text};
+    border: 1.5px solid {border};
+    border-radius: 6px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 11px;
+}}
+QProgressBar::chunk {{
+    background-color: {primary};
+    border-radius: 4px;
+    margin: 1px;
+}}
 """
+
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -530,7 +547,7 @@ class NotificationCard(QWidget):
         super().resizeEvent(event)
 
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 
 class HeaderBar(QWidget):
@@ -2040,8 +2057,14 @@ class EvoRepAuthApp(QWidget):
         self.btn_gerar_afd.setEnabled(False)
         self.btn_gerar_afd.clicked.connect(lambda: self.on_test_button_clicked("gerar_afd"))
 
+        # Barra de Progresso AFD
+        self.afd_progress_bar = QProgressBar()
+        self.afd_progress_bar.setVisible(False)
+        self.afd_progress_bar.setMinimumHeight(24)
+
         afd_layout.addWidget(self.btn_choose_afd_path)
         afd_layout.addWidget(self.btn_gerar_afd)
+        afd_layout.addWidget(self.afd_progress_bar)
         afd_layout.addStretch()
 
         top_boxes_layout.addWidget(afd_group)
@@ -2225,6 +2248,12 @@ class EvoRepAuthApp(QWidget):
         self.afd_count_4 = 0
         self.afd_count_5 = 0
         self.afd_count_6 = 0
+        
+        # Inicia a barra de progresso
+        self.afd_progress_bar.setValue(0)
+        self.afd_progress_bar.setVisible(True)
+        self.afd_progress_bar.setFormat("Iniciando... %p%")
+
         self.append_log("ABA TESTES (F5): Iniciando extração de AFD...")
         self._send_raw_command("main_", "01+RC+00+NR_REP")
 
@@ -2240,6 +2269,7 @@ class EvoRepAuthApp(QWidget):
                         self.afd_rep_num = "00000000000000001"
                     
                     self.append_log(f"ABA TESTES (F5): REP Num: {self.afd_rep_num}. Coletando modelo...")
+                    self.afd_progress_bar.setFormat("Obtendo Modelo... %p%")
                     
                     self.afd_state = "MODEL"
                     self._send_raw_command("main_", "01+RC+00+MODELO")
@@ -2258,6 +2288,7 @@ class EvoRepAuthApp(QWidget):
                         self.afd_rep_model = "EVO REP-C"
                     
                     self.append_log(f"ABA TESTES (F5): Modelo: {self.afd_rep_model}. Coletando dados do empregador...")
+                    self.afd_progress_bar.setFormat("Obtendo Empregador... %p%")
                     
                     # Prepara arquivo reservando espaço para o cabeçalho (302 bytes + \n)
                     filename = f"AFD{self.afd_rep_num}L.txt"
@@ -2285,6 +2316,8 @@ class EvoRepAuthApp(QWidget):
                         self.afd_emp_type = "1" if len(self.afd_emp_id) == 14 else "2"
                     
                     self.append_log(f"ABA TESTES (F5): Empregador: {self.afd_emp_name}. Buscando quantidade de registros...")
+                    self.afd_progress_bar.setFormat("Contando registros... %p%")
+
                     self.afd_state = "COUNT"
                     self._send_raw_command("main_", "01+RQ+00+R")
                 except Exception as e:
@@ -2299,8 +2332,15 @@ class EvoRepAuthApp(QWidget):
                     self.append_log(f"ABA TESTES (F5): AFD Total: {self.afd_total} registros. Iniciando coleta...")
                     
                     if self.afd_total == 0:
+                        self.afd_progress_bar.setMaximum(100)
+                        self.afd_progress_bar.setValue(100)
+                        self.afd_progress_bar.setFormat("Concluído (Vazio)")
                         self._finish_current_test("AFD Gerado (Equipamento vazio)", "#27AE60")
                         return
+
+                    self.afd_progress_bar.setMaximum(self.afd_total)
+                    self.afd_progress_bar.setValue(0)
+                    self.afd_progress_bar.setFormat("Coletando: %v/%m (%p%)")
 
                     self.afd_state = "COLLECTING"
                     self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
@@ -2340,11 +2380,13 @@ class EvoRepAuthApp(QWidget):
                         self.afd_collected += 1
                     
                     self.afd_nsr += passo
+                    self.afd_progress_bar.setValue(self.afd_collected)
                     self.append_log(f"ABA TESTES (F5): Coletados {self.afd_collected}/{self.afd_total}...")
 
                     if self.afd_collected < self.afd_total and passo > 0:
                         self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
                     else:
+                        self.afd_progress_bar.setValue(self.afd_total)
                         self._finish_current_test("AFD Gerado com Sucesso", "#27AE60")
                 except Exception as e:
                     self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
@@ -2355,6 +2397,10 @@ class EvoRepAuthApp(QWidget):
         # Para o timer de timeout
         self.test_timeout_timer.stop()
         
+        # Esconde a barra de progresso após um curto delay se for AFD
+        if self.test_mode == "gerar_afd":
+            QTimer.singleShot(2000, lambda: self.afd_progress_bar.setVisible(False))
+
         # Fecha arquivo se estiver aberto
         if self.afd_current_file:
             # Grava o trailer se o AFD foi gerado com sucesso
