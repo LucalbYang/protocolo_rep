@@ -1,6 +1,66 @@
 # constants.py
 
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
+
+# ══════════════════════════════════════════════════════════════════════
+#  CATEGORIAS DE CONFIGURAÇÃO (EC)
+# ══════════════════════════════════════════════════════════════════════
+
+EC_CATEGORIES = {
+    "Geral": [
+        "LOGIN", "SENHA_MENU", "LEITOR_VER_DIG", "TAM_BOB", "EVENTO_ON", 
+        "EXP_NR_REP", "TECLADO_MANUT", "SENSOR_CORTE", "FEW_PAPER", 
+        "DIGITO_OCULTO", "ACENTOS", "MENSAGEM", "NOBREAK", "GMT", 
+        "BEEP_TECLADO", "MODO_CADASTRO", "BIO_PREVIEW", "TEMPLATE", 
+        "ACORDO_SIND", "TEMPO_LIB"
+    ],
+    "REDE RJ45": [
+        "IP", "MASC_SUBREDE", "DNS", "GATEWAY", "MAC", "PORTA_TCP", 
+        "TIPO_COM", "CON_SEGURA", "IP_CON_SEGURA", "DHCP", "MODE", 
+        "RECONEXAO_IMEDIATA", "IP_SERVER", "SERVER_PORT", "HOSTNAME"
+    ],
+    "NTP": ["NTP", "NTP_SERVER", "NTP_TIMEOUT"],
+    "REDE WIFI": [
+        "IP_W", "MASC_SUBREDE_W", "DNS_W", "GATEWAY_W", "MAC_W", 
+        "PORTA_TCP_W", "CON_SEGURA_W", "IP_CON_SEGURA_W", "DHCP_W", 
+        "MODE_W", "RECONEXAO_IMEDIATA_W", "IP_SERVER_W", "SERVER_PORT_W", 
+        "USAR_DNS_W", "ADDR_SERVER_W", "NET_NAME", "NET_PWD", 
+        "NET_NAME_02", "NET_PWD_02"
+    ]
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  CATEGORIAS DE CONFIGURAÇÃO (RC)
+# ══════════════════════════════════════════════════════════════════════
+
+RC_CATEGORIES = {
+    "Geral": [
+        "LOGIN", "SENHA_MENU", "LEITOR_VER_DIG", "TAM_BOB", "EVENTO_ON", 
+        "EXP_NR_REP", "TECLADO_MANUT", "SENSOR_CORTE", "FEW_PAPER", 
+        "DIGITO_OCULTO", "ACENTOS", "MENSAGEM", "NOBREAK", "GMT", 
+        "BEEP_TECLADO", "MODO_CADASTRO", "BIO_PREVIEW", "TEMPLATE", 
+        "ACORDO_SIND", "TEMPO_LIB"
+    ],
+    "Equipamento": [
+        "NR_REP", "LEITOR_CARTAO", "LEITOR_BIOMETRIA", "MODELO", 
+        "ID_SOFTWARE", "CHAVE_PUBLICA", "VERSAO_PRODUTO", "VERSAO_MEM", 
+        "VERSAO_PROTOCOLO"
+    ],
+    "REDE RJ45": [
+        "IP", "MASC_SUBREDE", "DNS", "GATEWAY", "MAC", "PORTA_TCP", 
+        "TIPO_COM", "CON_SEGURA", "IP_CON_SEGURA", "DHCP", "MODE", 
+        "RECONEXAO_IMEDIATA", "IP_SERVER", "SERVER_PORT", "HOSTNAME"
+    ],
+    "NTP": ["NTP", "NTP_SERVER", "NTP_TIMEOUT"],
+    "REDE WIFI": [
+        "IP_W", "MASC_SUBREDE_W", "DNS_W", "GATEWAY_W", "MAC_W", 
+        "PORTA_TCP_W", "CON_SEGURA_W", "IP_CON_SEGURA_W", "DHCP_W", 
+        "MODE_W", "RECONEXAO_IMEDIATA_W", "IP_SERVER_W", "SERVER_PORT_W", 
+        "USAR_DNS_W", "ADDR_SERVER_W", "NET_NAME", "NET_PWD", 
+        "NET_NAME_02", "NET_PWD_02"
+    ]
+}
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  CHOICES DO COMANDO EC

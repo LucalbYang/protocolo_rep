@@ -301,6 +301,79 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
+# Internal RU commands - not directly exposed in main dropdown
+registrar_comando(CommandDefinition(
+    code="RU_QUANTIDADE",
+    description="Receber Colaboradores (Por Quantidade): Solicita dados de colaboradores a partir de um índice.",
+    template="01+RU+00+{Quantidade}]{Índice}",
+    params=[
+        CommandParam(
+            name="Quantidade",
+            type=int,
+            default=10,
+            required=True,
+            description="Quantidade de colaboradores"
+        ),
+        CommandParam(
+            name="Índice",
+            type=int,
+            default=0,
+            required=True,
+            description="Índice inicial (0 para o primeiro)"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RU_MATRICULA",
+    description="Receber Colaboradores (Por Matrícula): Solicita dados de um colaborador pela matrícula.",
+    template="01+RU+00+-1]{Matrícula}",
+    params=[
+        CommandParam(
+            name="Matrícula",
+            type=str,
+            default="",
+            required=True,
+            description="Matrícula do colaborador"
+        )
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RU_CPF",
+    description="Receber Colaboradores (Por CPF): Solicita dados de um colaborador pelo CPF.",
+    template="01+RU+00+-2]{CPF}",
+    params=[
+        CommandParam(
+            name="CPF",
+            type=str,
+            default="",
+            required=True,
+            description="CPF do colaborador (apenas números)"
+        )
+    ]
+))
+
+# Comando RU consolidado para a interface
+registrar_comando(CommandDefinition(
+    code="RU",
+    description="Receber Colaboradores: Selecione o tipo de filtro (Por Quantidade, Matrícula ou CPF).",
+    template="01+RU+00",  # O template real será substituído no main.py
+    params=[
+        CommandParam(
+            name="Tipo",
+            type=str,
+            description="Tipo de filtro para receber colaboradores",
+            required=True,
+            choices=[
+                {"label": "Por Quantidade", "value": "RU_QUANTIDADE"},
+                {"label": "Por Matrícula", "value": "RU_MATRICULA"},
+                {"label": "Por CPF", "value": "RU_CPF"},
+            ]
+        )
+    ]
+))
+
 registrar_comando(CommandDefinition(
     code="EU",
     description="Enviar Colaborador: Cadastra um novo colaborador no equipamento.",
@@ -384,6 +457,13 @@ registrar_comando(CommandDefinition(
 ))
 
 registrar_comando(CommandDefinition(
+    code="RE",
+    description="Receber Empregador: Obtém os dados do empregador cadastrado.",
+    template="01+{code}+00",
+    params=[]
+))
+
+registrar_comando(CommandDefinition(
     code="EE",
     description="Enviar Empregador: Cadastra o empregador no equipamento.",
     template="01+{code}+00+{Tipo}]{ID}]]{Nome}]{Local}",
@@ -407,13 +487,6 @@ registrar_comando(CommandDefinition(
             required=True
         )
     ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RE",
-    description="Receber Empregador: Obtém os dados do empregador cadastrado.",
-    template="01+{code}+00",
-    params=[]
 ))
 
 registrar_comando(CommandDefinition(
@@ -523,79 +596,6 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
-# Internal RU commands - not directly exposed in main dropdown
-registrar_comando(CommandDefinition(
-    code="RU_QUANTIDADE",
-    description="Receber Colaboradores (Por Quantidade): Solicita dados de colaboradores a partir de um índice.",
-    template="01+RU+00+{Quantidade}]{Índice}",
-    params=[
-        CommandParam(
-            name="Quantidade",
-            type=int,
-            default=10,
-            required=True,
-            description="Quantidade de colaboradores"
-        ),
-        CommandParam(
-            name="Índice",
-            type=int,
-            default=0,
-            required=True,
-            description="Índice inicial (0 para o primeiro)"
-        )
-    ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RU_MATRICULA",
-    description="Receber Colaboradores (Por Matrícula): Solicita dados de um colaborador pela matrícula.",
-    template="01+RU+00+-1]{Matrícula}",
-    params=[
-        CommandParam(
-            name="Matrícula",
-            type=str,
-            default="",
-            required=True,
-            description="Matrícula do colaborador"
-        )
-    ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RU_CPF",
-    description="Receber Colaboradores (Por CPF): Solicita dados de um colaborador pelo CPF.",
-    template="01+RU+00+-2]{CPF}",
-    params=[
-        CommandParam(
-            name="CPF",
-            type=str,
-            default="",
-            required=True,
-            description="CPF do colaborador (apenas números)"
-        )
-    ]
-))
-
-# Comando RU consolidado para a interface
-registrar_comando(CommandDefinition(
-    code="RU",
-    description="Receber Colaboradores: Selecione o tipo de filtro (Por Quantidade, Matrícula ou CPF).",
-    template="01+RU+00",  # O template real será substituído no main.py
-    params=[
-        CommandParam(
-            name="Tipo",
-            type=str,
-            description="Tipo de filtro para receber colaboradores",
-            required=True,
-            choices=[
-                {"label": "Por Quantidade", "value": "RU_QUANTIDADE"},
-                {"label": "Por Matrícula", "value": "RU_MATRICULA"},
-                {"label": "Por CPF", "value": "RU_CPF"},
-            ]
-        )
-    ]
-))
-
 # Comando RR consolidado para a interface
 registrar_comando(CommandDefinition(
     code="RR",
@@ -616,8 +616,54 @@ registrar_comando(CommandDefinition(
     ]
 ))
 
-# ========== Comandos ED (Enviar/Cadastrar/Deletar Biometria) ==========
+registrar_comando(CommandDefinition(
+    code="RD",
+    description="Receber Biometria: Solicita lista, quantidade ou templates biométricos.",
+    template="01+RD+00",
+    params=[
+        CommandParam(
+            name="Operação",
+            type=str,
+            choices=[
+                {"label": "Solicitar Lista", "value": "RD_LISTA"},
+                {"label": "Solicitar Quantidade", "value": "RD_QTD"},
+                {"label": "Receber Template", "value": "RD_TEMPLATE"},
+            ]
+        )
+    ]
+))
 
+# Sub-comandos RD
+registrar_comando(CommandDefinition(
+    code="RD_LISTA",
+    description="Solicitar Lista de Biometrias",
+    template="01+RD+00+L]{Quantidade}}{Indice}",
+    params=[
+        CommandParam(name="Quantidade", type=int, default=10, description="Quantidade de registros"),
+        CommandParam(name="Indice", type=int, default=0, description="Índice inicial")
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RD_QTD",
+    description="Solicitar Quantidade de Biometrias (Suprema/EVO)",
+    template="01+RD+00+Q]{Matricula}",
+    params=[
+        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador")
+    ]
+))
+
+registrar_comando(CommandDefinition(
+    code="RD_TEMPLATE",
+    description="Receber Template Biométrico",
+    template="01+RD+00+D]{Matricula}",
+    params=[
+        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador"),
+        CommandParam(name="Index", type=int, default=0, description="Index da template (Digital 0~9, Facial 0~7)")
+    ]
+))
+
+# ========== Comandos ED (Enviar/Cadastrar/Deletar Biometria) ==========
 registrar_comando(CommandDefinition(
     code="ED_CADASTRAR",
     description="Cadastrar Biometria: Registra a biometria de um colaborador.",
@@ -746,52 +792,5 @@ registrar_comando(CommandDefinition(
                 {"label": "Enviar - Face Corp", "value": "ED_FACE_CORP"},
             ]
         )
-    ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RD",
-    description="Receber Biometria: Solicita lista, quantidade ou templates biométricos.",
-    template="01+RD+00",
-    params=[
-        CommandParam(
-            name="Operação",
-            type=str,
-            choices=[
-                {"label": "Solicitar Lista", "value": "RD_LISTA"},
-                {"label": "Solicitar Quantidade", "value": "RD_QTD"},
-                {"label": "Receber Template", "value": "RD_TEMPLATE"},
-            ]
-        )
-    ]
-))
-
-# Sub-comandos RD
-registrar_comando(CommandDefinition(
-    code="RD_LISTA",
-    description="Solicitar Lista de Biometrias",
-    template="01+RD+00+L]{Quantidade}}{Indice}",
-    params=[
-        CommandParam(name="Quantidade", type=int, default=10, description="Quantidade de registros"),
-        CommandParam(name="Indice", type=int, default=0, description="Índice inicial")
-    ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RD_QTD",
-    description="Solicitar Quantidade de Biometrias (Suprema/EVO)",
-    template="01+RD+00+Q]{Matricula}",
-    params=[
-        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador")
-    ]
-))
-
-registrar_comando(CommandDefinition(
-    code="RD_TEMPLATE",
-    description="Receber Template Biométrico",
-    template="01+RD+00+D]{Matricula}",
-    params=[
-        CommandParam(name="Matricula", type=str, required=True, description="Matrícula do colaborador"),
-        CommandParam(name="Index", type=int, default=0, description="Index da template (Digital 0~9, Facial 0~7)")
     ]
 ))

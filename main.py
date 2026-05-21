@@ -291,7 +291,7 @@ class EvoRepAuthApp(QWidget):
             self.client_btn_client_state.clicked.connect(self.on_connect_clicked)
 
             # 🔹 REQUISITO: Botão Macro para F2 (Client Mode)
-            macro_btn = QPushButton("⚙  Macro")
+            macro_btn = QPushButton("Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
             conn_layout.addWidget(macro_btn, 5, 0, 1, 2)
@@ -310,7 +310,7 @@ class EvoRepAuthApp(QWidget):
             conn_layout.addWidget(self.main_connect_button, 4, 0, 1, 2)
 
             # 🔹 REQUISITO: Botão Macro (F1)
-            macro_btn = QPushButton("⚙  Macro")
+            macro_btn = QPushButton("Macro")
             macro_btn.setVisible(False)
             macro_btn.clicked.connect(lambda: self.on_macro_clicked(prefix))
             conn_layout.addWidget(macro_btn, 5, 0, 1, 2)
@@ -507,97 +507,108 @@ class EvoRepAuthApp(QWidget):
         log_v.addWidget(log_group)
         return log_tab
 
+        # Organiza as boxes no layout horizontal com peso 1 para ocuparem 1/3 cada
+        top_boxes_layout.addWidget(conn_group, 1)
+        top_boxes_layout.addWidget(cad_group, 1)
+        top_boxes_layout.addWidget(afd_group, 1)
+
+        # Layout Principal da aba
+        layout.addLayout(top_boxes_layout)
+        layout.addStretch()
+
+        return tab
+
+    # ... (Resto do método inalterado, mas ajustando os botões na definição abaixo)
+
+    # Nota: Precisamos corrigir os botões especificamente no _create_test_tab
+    # (Re-aplicando a definição completa do método com as correções abaixo)
     def _create_test_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
-        # Container horizontal para as boxes superiores
         top_boxes_layout = QHBoxLayout()
-        top_boxes_layout.setSpacing(20)
+        top_boxes_layout.setSpacing(10)
+        top_boxes_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # ── Painel de Conexão ──────────────────────────────────────
+        # 1. Box de Conexão
         conn_group = QGroupBox("Conexão")
-        conn_layout = QGridLayout(conn_group)
-        conn_layout.setContentsMargins(15, 15, 15, 15)
-        conn_layout.setSpacing(10)
-
-        conn_layout.addWidget(QLabel("IP:"), 0, 0)
+        conn_form = QFormLayout()
+        conn_form.setContentsMargins(10, 20, 10, 10)
+        conn_form.setSpacing(5)
+        
         self.test_ip_input = QLineEdit()
-        conn_layout.addWidget(self.test_ip_input, 0, 1)
-
-        conn_layout.addWidget(QLabel("Porta:"), 1, 0)
         self.test_port_input = QLineEdit()
-        conn_layout.addWidget(self.test_port_input, 1, 1)
-
-        # Linkagem com F1
+        
         self.test_ip_input.setText(self.main_ip_input.text())
         self.test_port_input.setText(self.main_port_input.text())
-
         self.main_ip_input.textChanged.connect(self.test_ip_input.setText)
         self.test_ip_input.textChanged.connect(self.main_ip_input.setText)
         self.main_port_input.textChanged.connect(self.test_port_input.setText)
         self.test_port_input.textChanged.connect(self.main_port_input.setText)
 
-        top_boxes_layout.addWidget(conn_group, 1)
+        conn_form.addRow("IP:", self.test_ip_input)
+        conn_form.addRow("Porta:", self.test_port_input)
+        conn_group.setLayout(conn_form)
 
-        # ── Painel de Cadastrar ─────────────────────────────────────
+        # 2. Box de Cadastrar
         cad_group = QGroupBox("Cadastrar")
-        cad_layout = QVBoxLayout(cad_group)
-        cad_layout.setContentsMargins(15, 15, 15, 15)
-        cad_layout.setSpacing(15)
+        cad_box_layout = QVBoxLayout()
+        cad_box_layout.setContentsMargins(10, 20, 10, 10)
+        cad_box_layout.setSpacing(5)
 
         self.btn_user_padrao = QPushButton("Usuário Padrão")
         self.btn_user_padrao.setObjectName("primary_btn")
-        self.btn_user_padrao.setMinimumHeight(40)
+        self.btn_user_padrao.setMinimumHeight(25)
         self.btn_user_padrao.clicked.connect(lambda: self.on_test_button_clicked("usuario_padrao"))
 
-        self.btn_empregador = QPushButton("Empregador")
+        self.btn_empregador = QPushButton("Empregador EVO")
         self.btn_empregador.setObjectName("primary_btn")
-        self.btn_empregador.setMinimumHeight(40)
+        self.btn_empregador.setMinimumHeight(25)
         self.btn_empregador.clicked.connect(lambda: self.on_test_button_clicked("empregador"))
 
         self.btn_colab_teste = QPushButton("Colaborador Teste")
         self.btn_colab_teste.setObjectName("primary_btn")
-        self.btn_colab_teste.setMinimumHeight(40)
+        self.btn_colab_teste.setMinimumHeight(25)
         self.btn_colab_teste.clicked.connect(lambda: self.on_test_button_clicked("colaborador"))
 
-        cad_layout.addWidget(self.btn_user_padrao)
-        cad_layout.addWidget(self.btn_empregador)
-        cad_layout.addWidget(self.btn_colab_teste)
+        cad_box_layout.addWidget(self.btn_user_padrao)
+        cad_box_layout.addWidget(self.btn_empregador)
+        cad_box_layout.addWidget(self.btn_colab_teste)
+        cad_group.setLayout(cad_box_layout)
 
-        top_boxes_layout.addWidget(cad_group, 1)
-        
-        # ── Painel de Extrair AFD ──────────────────────────────────
+        # 3. Box de Extrair AFD
         afd_group = QGroupBox("Extrair AFD")
-        afd_layout = QVBoxLayout(afd_group)
-        afd_layout.setContentsMargins(15, 15, 15, 15)
-        afd_layout.setSpacing(15)
+        afd_box_layout = QVBoxLayout()
+        afd_box_layout.setContentsMargins(10, 20, 10, 10)
+        afd_box_layout.setSpacing(5)
 
-        self.btn_choose_afd_path = QPushButton("Escolher caminho salvação")
-        self.btn_choose_afd_path.setMinimumHeight(40)
+        self.btn_choose_afd_path = QPushButton("Escolher pasta")
+        self.btn_choose_afd_path.setMinimumHeight(25)
         self.btn_choose_afd_path.clicked.connect(self.on_choose_afd_path)
 
         self.btn_gerar_afd = QPushButton("Gerar AFD")
         self.btn_gerar_afd.setObjectName("primary_btn")
-        self.btn_gerar_afd.setMinimumHeight(40)
         self.btn_gerar_afd.setEnabled(False)
+        self.btn_gerar_afd.setMinimumHeight(25)
         self.btn_gerar_afd.clicked.connect(lambda: self.on_test_button_clicked("gerar_afd"))
 
-        # Barra de Progresso AFD
         self.afd_progress_bar = QProgressBar()
         self.afd_progress_bar.setVisible(False)
-        self.afd_progress_bar.setMinimumHeight(24)
+        self.afd_progress_bar.setMinimumHeight(15)
 
-        afd_layout.addWidget(self.btn_choose_afd_path)
-        afd_layout.addWidget(self.btn_gerar_afd)
-        afd_layout.addWidget(self.afd_progress_bar)
-        afd_layout.addStretch()
+        afd_box_layout.addWidget(self.btn_choose_afd_path)
+        afd_box_layout.addWidget(self.btn_gerar_afd)
+        afd_box_layout.addWidget(self.afd_progress_bar)
+        afd_group.setLayout(afd_box_layout)
 
+        # Organiza as boxes no layout horizontal com peso 1 (distribuição igualitária)
+        top_boxes_layout.addWidget(conn_group, 1)
+        top_boxes_layout.addWidget(cad_group, 1)
         top_boxes_layout.addWidget(afd_group, 1)
 
-        # Adiciona o layout horizontal ao layout principal da aba
+        # Layout Principal da aba
         layout.addLayout(top_boxes_layout)
         layout.addStretch()
 
@@ -871,7 +882,7 @@ class EvoRepAuthApp(QWidget):
                     self.afd_progress_bar.setFormat("Coletando: %v/%m (%p%)")
 
                     self.afd_state = "COLLECTING"
-                    self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
+                    self._send_raw_command("main_", f"01+RR+00+N]80]{self.afd_nsr}")
                 except Exception as e:
                     self._finish_current_test(f"Erro AFD: {e}", "#C0392B")
             else:
@@ -912,7 +923,7 @@ class EvoRepAuthApp(QWidget):
                     self.append_log(f"ABA TESTES (F5): Coletados {self.afd_collected}/{self.afd_total}...")
 
                     if self.afd_collected < self.afd_total and passo > 0:
-                        self._send_raw_command("main_", f"01+RR+00+N]30]{self.afd_nsr}")
+                        self._send_raw_command("main_", f"01+RR+00+N]80]{self.afd_nsr}")
                     else:
                         self.afd_progress_bar.setValue(self.afd_total)
                         self._finish_current_test("AFD Gerado com Sucesso", "#27AE60")
@@ -1055,7 +1066,6 @@ class EvoRepAuthApp(QWidget):
 
     def on_command_selected(self, index):
         prefix = self._get_active_prefix()
-        # REQUISITO: A aba de testes não usa construção dinâmica de comandos
         if prefix == "test_":
             return
 
@@ -1069,6 +1079,144 @@ class EvoRepAuthApp(QWidget):
 
         cmd_code = command_combo.currentData()
 
+    def setup_ec_categories(self, dynamic_layout):
+        from constants import EC_CATEGORIES
+        
+        # 1. ComboBox de Categorias
+        cat_combo = NoScrollComboBox()
+        cat_combo.addItem("Selecione uma categoria...", None)
+        for cat in EC_CATEGORIES.keys():
+            cat_combo.addItem(cat)
+        
+        dynamic_layout.addRow("Categoria:", cat_combo)
+        
+        # 2. ComboBox de Comandos (Oculto inicialmente)
+        self.ec_cmd_label = QLabel("Comando:")
+        self.ec_cmd_combo = NoScrollComboBox()
+        self.ec_cmd_label.setVisible(False)
+        self.ec_cmd_combo.setVisible(False)
+        dynamic_layout.addRow(self.ec_cmd_label, self.ec_cmd_combo)
+        
+        def update_cmd_list(cat_name):
+            self.ec_cmd_combo.clear()
+            if cat_name in EC_CATEGORIES:
+                self.ec_cmd_label.setVisible(True)
+                self.ec_cmd_combo.setVisible(True)
+                # Adiciona cada comando com seu valor como DATA também
+                for cmd in EC_CATEGORIES[cat_name]:
+                    self.ec_cmd_combo.addItem(cmd, cmd) 
+                
+                # Força a atualização do campo de valor para o primeiro item da lista
+                self.update_ec_valor_field()
+            else:
+                self.ec_cmd_label.setVisible(False)
+                self.ec_cmd_combo.setVisible(False)
+                self.update_ec_valor_field() 
+                    
+        cat_combo.currentTextChanged.connect(update_cmd_list)
+        # Conecta a mudança de texto para atualizar o campo de valor
+        self.ec_cmd_combo.currentTextChanged.connect(self.update_ec_valor_field)
+        
+        self.param_inputs["EC_Categoria"] = cat_combo
+        self.param_inputs["Configuração"] = self.ec_cmd_combo 
+
+    def setup_rc_categories(self, dynamic_layout):
+        from constants import RC_CATEGORIES
+        
+        # 1. ComboBox de Categorias
+        cat_combo = NoScrollComboBox()
+        cat_combo.addItem("Selecione uma categoria...", None)
+        for cat in RC_CATEGORIES.keys():
+            cat_combo.addItem(cat)
+            
+        dynamic_layout.addRow("Categoria:", cat_combo)
+        
+        # 2. Criar todos os checkboxes (ocultos inicialmente)
+        cmd_def = COMMANDS_REGISTRY["RC"]
+        config_param = next(p for p in cmd_def.params if p.name == "Configuração")
+        
+        checkboxes = []
+        cb_map = {}
+        
+        for choice in config_param.choices:
+            cb = QCheckBox(choice['label'])
+            cb.setProperty("value", choice['value'])
+            cb.setVisible(False)
+            dynamic_layout.addRow("", cb)
+            
+            # Como passamos "" como string, o QFormLayout cria automaticamente um QLabel
+            label_widget = dynamic_layout.labelForField(cb)
+            if label_widget:
+                label_widget.setVisible(False)
+                
+            checkboxes.append(cb)
+            cb_map[choice['value']] = cb
+            
+        def update_rc_checkboxes(cat_name):
+            # Esconde e desmarca todos os checkboxes
+            for cb in checkboxes:
+                cb.setVisible(False)
+                cb.setChecked(False)
+                label_widget = dynamic_layout.labelForField(cb)
+                if label_widget:
+                    label_widget.setVisible(False)
+            
+            # Mostra apenas os checkboxes da categoria selecionada
+            if cat_name in RC_CATEGORIES:
+                allowed_values = RC_CATEGORIES[cat_name]
+                for val in allowed_values:
+                    if val in cb_map:
+                        cb = cb_map[val]
+                        cb.setVisible(True)
+                        label_widget = dynamic_layout.labelForField(cb)
+                        if label_widget:
+                            label_widget.setVisible(True)
+                            
+        cat_combo.currentTextChanged.connect(update_rc_checkboxes)
+        
+        self.param_inputs["RC_Categoria"] = cat_combo
+        self.param_inputs["Configuração"] = checkboxes
+
+
+    # Removed clear_ec_valor_field as its logic is now integrated into update_ec_valor_field
+    # def clear_ec_valor_field(self, dynamic_layout):
+    #     old_valor_widget = self.param_inputs.get("Valor")
+    #     if old_valor_widget:
+    #         dynamic_layout.removeRow(old_valor_widget)
+    #         if "Valor" in self.param_inputs:
+    #             del self.param_inputs["Valor"]
+
+
+    def on_command_selected(self, index):
+        prefix = self._get_active_prefix()
+        if prefix == "test_":
+            return
+
+        dynamic_layout    = getattr(self, f"{prefix}dynamic_layout")
+        command_combo     = getattr(self, f"{prefix}command_combo")
+        cmd_description_label = getattr(self, f"{prefix}cmd_description_label")
+
+        while dynamic_layout.rowCount() > 0:
+            dynamic_layout.removeRow(0)
+        self.param_inputs.clear()
+
+        cmd_code = command_combo.currentData()
+
+        # 🔹 LÓGICA DE CATEGORIAS PARA EC
+        if cmd_code == "EC":
+            cmd_def = COMMANDS_REGISTRY["EC"]
+            cmd_description_label.setText(cmd_def.description)
+            self.setup_ec_categories(dynamic_layout)
+            return
+
+        # 🔹 LÓGICA DE CATEGORIAS PARA RC
+        if cmd_code == "RC":
+            cmd_def = COMMANDS_REGISTRY["RC"]
+            cmd_description_label.setText(cmd_def.description)
+            self.setup_rc_categories(dynamic_layout)
+            return
+
+
         if cmd_code is None:
             cmd_description_label.setText("Modo Manual: Digite a string bruta do comando para enviá-la diretamente.")
             self.manual_input = QLineEdit(self.last_manual_command)
@@ -1079,7 +1227,7 @@ class EvoRepAuthApp(QWidget):
         else:
             cmd_def = COMMANDS_REGISTRY[cmd_code]
             cmd_description_label.setText(cmd_def.description)
-
+            # ... rest of the original logic
             pending_data_field = None
             pending_data_label = None
 
@@ -1087,33 +1235,23 @@ class EvoRepAuthApp(QWidget):
                 label_text = f"{param.name} {'' if param.required else '(opcional)'}:"
 
                 if param.choices:
-                    if cmd_code == "RC" and "config" in cmd_def.description.lower():
-                        checkboxes = []
-                        for choice in param.choices:
-                            cb = QCheckBox(choice['label'])
-                            cb.setProperty("value", choice['value'])
-                            dynamic_layout.addRow("", cb)
-                            checkboxes.append(cb)
-                        self.param_inputs[param.name] = checkboxes
-                        continue
-                    else:
-                        input_field = NoScrollComboBox()
-                        for choice in param.choices:
-                            input_field.addItem(choice['label'], choice['value'])
-                        dynamic_layout.addRow(label_text, input_field)
-                        self.param_inputs[param.name] = input_field
+                    input_field = NoScrollComboBox()
+                    for choice in param.choices:
+                        input_field.addItem(choice['label'], choice['value'])
+                    dynamic_layout.addRow(label_text, input_field)
+                    self.param_inputs[param.name] = input_field
 
-                        if cmd_code == "EC" and param.name == "Configuração":
-                            input_field.currentIndexChanged.connect(self.update_ec_valor_field)
-                        elif cmd_code == "RR" and param.name == "Tipo":
-                            input_field.currentIndexChanged.connect(self.update_rr_fields)
-                        elif cmd_code == "RU" and param.name == "Tipo":
-                            input_field.currentIndexChanged.connect(self.update_ru_fields)
-                        elif cmd_code == "ED" and param.name == "Operação":
-                            input_field.currentIndexChanged.connect(self.update_ed_fields)
-                        elif cmd_code == "RD" and param.name == "Operação":
-                            input_field.currentIndexChanged.connect(self.update_rd_fields)
-                        continue
+                    if cmd_code == "EC" and param.name == "Configuração":
+                        input_field.currentIndexChanged.connect(self.update_ec_valor_field)
+                    elif cmd_code == "RR" and param.name == "Tipo":
+                        input_field.currentIndexChanged.connect(self.update_rr_fields)
+                    elif cmd_code == "RU" and param.name == "Tipo":
+                        input_field.currentIndexChanged.connect(self.update_ru_fields)
+                    elif cmd_code == "ED" and param.name == "Operação":
+                        input_field.currentIndexChanged.connect(self.update_ed_fields)
+                    elif cmd_code == "RD" and param.name == "Operação":
+                        input_field.currentIndexChanged.connect(self.update_rd_fields)
+                    continue
                 else:
                     input_field = QLineEdit(str(param.default))
                     input_field.setPlaceholderText(param.description)
@@ -1169,23 +1307,37 @@ class EvoRepAuthApp(QWidget):
         """Atualiza o campo 'Valor' do comando EC com base na 'Configuração' selecionada."""
         prefix = self._get_active_prefix()
         dynamic_layout = getattr(self, f"{prefix}dynamic_layout")
-        config_combo   = self.param_inputs.get("Configuração")
+        config_combo   = self.param_inputs.get("Configuração") # This is self.ec_cmd_combo
         if not config_combo: return
 
         config_key = config_combo.currentData()
 
-        old_valor_widget = self.param_inputs.get("Valor")
-        if old_valor_widget:
-            dynamic_layout.removeRow(old_valor_widget)
+        # Sempre remove a linha 'Valor' existente antes de adicionar uma nova
+        # Percorre as linhas de trás para frente para remover com segurança
+        for i in range(dynamic_layout.rowCount() - 1, -1, -1):
+            # No PyQt6, o acesso ao enum é via QFormLayout.ItemRole
+            label_item = dynamic_layout.itemAt(i, QFormLayout.ItemRole.LabelRole)
+            if label_item and label_item.widget():
+                label_widget = label_item.widget()
+                if isinstance(label_widget, QLabel) and label_widget.text() in ["Valor:", "Valor (opcional):"]:
+                    dynamic_layout.removeRow(i)
+                    if "Valor" in self.param_inputs:
+                        del self.param_inputs["Valor"]
+                    break
+
+        if config_key is None:
+            return
 
         choices = EC_VAL_CHOICES.get(config_key)
 
+        new_input = None
         if choices:
             new_input = NoScrollComboBox()
             for c in choices:
                 new_input.addItem(c['label'], c['value'])
         else:
             new_input = QLineEdit()
+            # ... (placeholders logic remains same)
             if config_key == "LOGIN":         new_input.setPlaceholderText("Máx 16 caracteres")
             elif config_key == "SENHA_MENU":  new_input.setPlaceholderText("6 dígitos")
             elif config_key == "MENSAGEM":    new_input.setPlaceholderText("Máx 20 caracteres")
@@ -1193,20 +1345,24 @@ class EvoRepAuthApp(QWidget):
             elif config_key == "TAM_BOB":     new_input.setPlaceholderText("0 ~ 400")
             elif config_key == "TEMPO_LIB":   new_input.setPlaceholderText("0 ~ 60")
             elif config_key == "NTP_TIMEOUT": new_input.setPlaceholderText("1 ~ 99")
-            elif any(x in config_key for x in ["IP", "DNS", "GATEWAY", "SERVER_IP"]):
+            elif any(x in str(config_key) for x in ["IP", "DNS", "GATEWAY", "SERVER_IP"]):
                 new_input.setPlaceholderText("Ex: 192.168.1.100")
-            elif "PORTA" in config_key or "SERVER_PORT" in config_key:
+            elif "PORTA" in str(config_key) or "SERVER_PORT" in str(config_key):
                 new_input.setPlaceholderText("1000 ~ 65535")
+            else:
+                new_input.setPlaceholderText(f"Valor para {config_key}")
 
-        if hasattr(new_input, "returnPressed"):
-            new_input.returnPressed.connect(self.on_enter_pressed)
-        
-        if isinstance(new_input, QLineEdit) and any(x in config_key for x in ["IP", "DNS", "GATEWAY", "SERVER_IP"]):
-            new_input.editingFinished.connect(lambda: self._normalize_ip_field(new_input))
+        if new_input:
+            if hasattr(new_input, "returnPressed"):
+                new_input.returnPressed.connect(self.on_enter_pressed)
+            
+            if isinstance(new_input, QLineEdit) and any(x in str(config_key) for x in ["IP", "DNS", "GATEWAY", "SERVER_IP"]):
+                new_input.editingFinished.connect(lambda: self._normalize_ip_field(new_input))
 
-        label_text = "Valor (opcional):" if config_key == "MENSAGEM" else "Valor:"
-        dynamic_layout.addRow(label_text, new_input)
-        self.param_inputs["Valor"] = new_input
+            label_text = "Valor (opcional):" if config_key == "MENSAGEM" else "Valor:"
+            dynamic_layout.addRow(label_text, new_input)
+            self.param_inputs["Valor"] = new_input
+
 
     def update_rd_fields(self):
         """Atualiza os campos do comando RD com base na 'Operação' selecionada."""
