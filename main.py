@@ -434,10 +434,6 @@ class EvoRepAuthApp(QWidget):
         received_output.setReadOnly(True)
         recv_v.addWidget(received_output)
 
-        if is_f3:
-            sent_group.setVisible(False)
-            received_group.setVisible(False)
-
         log_row.addWidget(sent_group)
         log_row.addWidget(received_group)
         layout.addLayout(log_row)
@@ -507,21 +503,6 @@ class EvoRepAuthApp(QWidget):
         log_v.addWidget(log_group)
         return log_tab
 
-        # Organiza as boxes no layout horizontal com peso 1 para ocuparem 1/3 cada
-        top_boxes_layout.addWidget(conn_group, 1)
-        top_boxes_layout.addWidget(cad_group, 1)
-        top_boxes_layout.addWidget(afd_group, 1)
-
-        # Layout Principal da aba
-        layout.addLayout(top_boxes_layout)
-        layout.addStretch()
-
-        return tab
-
-    # ... (Resto do método inalterado, mas ajustando os botões na definição abaixo)
-
-    # Nota: Precisamos corrigir os botões especificamente no _create_test_tab
-    # (Re-aplicando a definição completa do método com as correções abaixo)
     def _create_test_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -1009,29 +990,32 @@ class EvoRepAuthApp(QWidget):
         color = "#C0392B" # Vermelho padrão (Erro)
         
         if self.test_mode == "usuario_padrao":
-            if text == "01+ES+000+1+0":
+            if text.startswith("01+ES+000+1+0"):
                 msg = "Usuário Padrão Cadastrado com Sucesso"
                 color = "#27AE60" # Verde Sucesso
-            elif text == "01+ES+000+1+23":
+            elif text.startswith("01+ES+000+1+23"):
                 msg = "Usuário Padrão já Cadastrado Anteriormente"
                 color = "#E67E22" # Laranja (Já cadastrado)
             else:
-                msg = "Erro ao Cadastrar"
+                msg = "Erro ao Cadastrar Usuário Padrão"
         elif self.test_mode == "empregador":
-            if text == "01+EE+000":
+            if text.startswith("01+EE+000"):
                 msg = "Empregador Cadastrado com Sucesso"
                 color = "#27AE60"
             else:
-                msg = "Erro ao Cadastrar"
+                msg = "Erro ao Cadastrar Empregador"
         elif self.test_mode == "colaborador":
-            if text == "01+EU+000+1+0":
+            if text.startswith("01+EU+000+1+0"):
                 msg = "Colaborador Cadastrado com Sucesso"
                 color = "#27AE60"
             else:
-                msg = "Erro ao Cadastrar"
+                msg = "Erro ao Cadastrar Colaborador"
 
         if msg:
             self._finish_current_test(msg, color)
+        else:
+            # Fallback para resposta desconhecida para não travar a UI
+            self._finish_current_test(f"Resposta Inesperada: {text[:20]}...", "#C0392B")
 
     def _send_raw_command(self, prefix, command_str):
         state = self.tab_data[prefix]
@@ -1863,14 +1847,8 @@ class EvoRepAuthApp(QWidget):
             self.stacked_widget.setCurrentIndex(2)
             self.on_command_selected(0)
         elif event.key() == Qt.Key.Key_F3:
-            if self.stacked_widget.currentIndex() == 3:
-                # Toggle visibilidade das boxes de string na aba F3
-                is_vis = not self.f3_sent_group.isVisible()
-                self.f3_sent_group.setVisible(is_vis)
-                self.f3_received_group.setVisible(is_vis)
-            else:
-                self.stacked_widget.setCurrentIndex(3)
-                self.on_command_selected(0)
+            self.stacked_widget.setCurrentIndex(3)
+            self.on_command_selected(0)
         elif event.key() == Qt.Key.Key_F5:
             self.stacked_widget.setCurrentIndex(4)
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -2086,6 +2064,24 @@ class EvoRepAuthApp(QWidget):
         if prefix is None: prefix = self._get_active_prefix()
         state = self.tab_data[prefix]
 
+        # 🔹 Atualiza a string recebida IMEDIATAMENTE na interface
+        if state["last_received_text"]: state["last_received_text"] += "\n" + text
+        else: state["last_received_text"] = text
+
+        # Limita o buffer visual para evitar crash de RAM
+        if len(state["last_received_text"]) > 20000:
+            state["last_received_text"] = "..." + state["last_received_text"][-20000:]
+
+        self.update_sent_received_output(prefix)
+
+        # 🔹 DETECÇÃO GLOBAL DE BLOQUEIO (Erro 047)
+        # Se aparecer 047 em qualquer resposta (ex: 01+RA+047, 01+EU+047), bloqueia e desconecta.
+        if "00+00+047" in text or re.search(r"01\+[A-Z]{2}\+047", text):
+            self.append_log(f"BLOQUEIO DETECTADO ({prefix}): {text}")
+            QMessageBox.warning(self, "Equipamento Bloqueado", "Equipamento bloqueado")
+            self.disconnect(prefix)
+            return
+
         # 🔹 REQUISITO: Se houver macro rodando, notificar a janela
         if hasattr(self, f"{prefix}macro_window"):
             window = getattr(self, f"{prefix}macro_window")
@@ -2094,6 +2090,16 @@ class EvoRepAuthApp(QWidget):
 
         # 🔹 Lógica especial para processar resposta RB na aba F3
         if prefix == "f3_":
+            # Detecta se a resposta parece criptografada (não começa com o protocolo 01+ ou 00+)
+            is_encrypted = not (text.startswith("01+") or text.startswith("00+"))
+            if is_encrypted:
+                self.append_log(f"F3: Criptografia detectada: {text}")
+                QMessageBox.warning(self, "Criptografia Detectada", 
+                                    "Equipamento com criptografia ativa.\n\n"
+                                    "Por favor, reinicie o REP para prosseguir com o desbloqueio na aba F3.")
+                self.disconnect(prefix)
+                return
+
             if text.startswith("01+RB+000+"):
                 state["reconnect_count"] = 0
                 try:
@@ -2122,6 +2128,12 @@ class EvoRepAuthApp(QWidget):
             elif text.startswith("01+EB+012"):
                 QMessageBox.warning(self, "Desbloqueio F3", "Código de Desbloqueio Inválido")
 
+            elif text.startswith("01+EB+121"):
+                QMessageBox.warning(self, "Desbloqueio F3", 
+                                    "Não foi possível realizar o desbloqueio pois o tamper está aberto.")
+                self.disconnect(prefix)
+                return
+
             elif "00+00+015" in text:
                 self.append_log(f"F3: Erro 015 detectado na resposta: {text}")
                 if state["reconnect_count"] < 3:
@@ -2133,17 +2145,10 @@ class EvoRepAuthApp(QWidget):
                     self.append_log("F3: Erro 015 persistente após 3 tentativas. Reconexão automática interrompida.")
                     state["reconnect_count"] = 0
 
-        if self.test_mode and prefix == "main_":
-            self.handle_test_response(text)
-
-        if state["last_received_text"]: state["last_received_text"] += "\n" + text
-        else: state["last_received_text"] = text
-
-        # Limita o buffer visual para evitar crash de RAM em transferências gigantes (ex: AFD)
-        if len(state["last_received_text"]) > 20000:
-            state["last_received_text"] = "..." + state["last_received_text"][-20000:]
-
-        self.update_sent_received_output(prefix)
+        if self.test_mode and prefix == "main_" and state["connected"]:
+            # Filtro para ignorar mensagens de handshake que podem vir de workers persistentes
+            if not (text.startswith("01+RA") or text.startswith("01+EA")):
+                self.handle_test_response(text)
 
     def append_received_bytes(self, hex_text: str, prefix=None):
         if prefix is None: prefix = self._get_active_prefix()
@@ -2256,6 +2261,11 @@ class EvoRepAuthApp(QWidget):
             state["worker"].auto_sent_signal.connect(lambda txt, bts: self.on_f3_auto_sent(txt, bts))
 
         state["worker"].log_signal.connect(self.append_log)
+        if hasattr(state["worker"], "sent_signal"):
+            state["worker"].sent_signal.connect(lambda txt, p=prefix: self.append_sent(txt, p))
+            state["worker"].sent_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_sent_bytes(hex_txt, p))
+            state["worker"].received_signal.connect(lambda txt, p=prefix: self.append_received(txt, p))
+            state["worker"].received_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_received_bytes(hex_txt, p))
         state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
         state["worker"].start()
 
@@ -2292,6 +2302,11 @@ class EvoRepAuthApp(QWidget):
                     port = int(port_text)
                     state["worker"] = ClientNetworkWorker(ip, port, user, password)
                     state["worker"].log_signal.connect(self.append_log)
+                    if hasattr(state["worker"], "sent_signal"):
+                        state["worker"].sent_signal.connect(lambda txt, p=prefix: self.append_sent(txt, p))
+                        state["worker"].sent_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_sent_bytes(hex_txt, p))
+                        state["worker"].received_signal.connect(lambda txt, p=prefix: self.append_received(txt, p))
+                        state["worker"].received_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_received_bytes(hex_txt, p))
                     state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
                     state["worker"].start()
                     self.append_log("Servidor reiniciado para aguardar nova conexão.")
@@ -2391,6 +2406,9 @@ class EvoRepAuthApp(QWidget):
             self.f3_connect_button.setObjectName("primary_btn")
             self.f3_connect_button.setEnabled(True)
             self.f3_unlock_button.setEnabled(False)
+            # Limpa campos de identificação
+            self.f3_rep_num_field.clear()
+            self.f3_unlock_code_field.clear()
 
         getattr(self, f"{prefix}send_button").setEnabled(False)
         self.set_inputs_enabled(True, prefix)
@@ -2482,9 +2500,17 @@ class EvoRepAuthApp(QWidget):
                 self.f3_connect_button.setText("Conectar")
                 self.f3_connect_button.setObjectName("primary_btn")
                 self.f3_connect_button.setEnabled(True)
+                # Limpa campos de identificação em caso de falha
+                self.f3_rep_num_field.clear()
+                self.f3_unlock_code_field.clear()
 
             getattr(self, f"{prefix}send_button").setEnabled(False)
             self.set_inputs_enabled(True, prefix)
+
+            if "Erro 047" in message:
+                QMessageBox.warning(self, "Equipamento Bloqueado", "Equipamento bloqueado")
+                self.disconnect(prefix)
+                return
 
             if "Operação cancelada pelo usuário" in message or "Servidor parado pelo usuário" in message:
                 return
@@ -2519,3 +2545,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
