@@ -8,7 +8,7 @@ from evo_crypto import EvoRepCrypto
 
 class NetworkWorker(QThread):
     log_signal      = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str, object, bytes)
+    finished_signal = pyqtSignal(bool, str, object, bytes, object)
     sent_signal = pyqtSignal(str)
     sent_bytes_signal = pyqtSignal(str)
     received_signal = pyqtSignal(str)
@@ -29,6 +29,7 @@ class NetworkWorker(QThread):
         start_time = time.time()
         timeout_limit = 10.0
         last_error = "Tempo esgotado"
+        rsa_key_data = None
 
         while self.running and (time.time() - start_time) < timeout_limit:
             sock = None
@@ -37,29 +38,48 @@ class NetworkWorker(QThread):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.settimeout(2)
-                sock.connect((self.ip, self.port))
+                sock.connect((ip_val := self.ip, port_val := self.port))
 
                 self.log_signal.emit("Conexão estabelecida. Iniciando handshake...")
 
-                ra_payload = "01+RA+00"
-                ra_packet = EvoRepProtocol.pack(ra_payload)
-                self.sent_signal.emit(ra_payload)
-                self.sent_bytes_signal.emit(ra_packet.hex(' '))
-                sock.sendall(ra_packet)
+                # 🔹 NOVO: Loop de retentativas para o comando RA dentro do mesmo socket
+                payload_ra = ""
+                for attempt in range(3):
+                    if not self.running: break
+                    try:
+                        ra_payload = "01+RA+00"
+                        ra_packet = EvoRepProtocol.pack(ra_payload)
+                        self.sent_signal.emit(ra_payload)
+                        self.sent_bytes_signal.emit(ra_packet.hex(' '))
+                        sock.sendall(ra_packet)
 
-                resp_data = EvoRepProtocol.receive_full(sock)
-                payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
-                self.received_signal.emit(payload_ra)
-                self.received_bytes_signal.emit(resp_data.hex(' '))
+                        resp_data = EvoRepProtocol.receive_full(sock)
+                        payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                        self.received_signal.emit(payload_ra)
+                        self.received_bytes_signal.emit(resp_data.hex(' '))
+
+                        if payload_ra.startswith("01+RA+"):
+                            break # Sucesso
+                        else:
+                            self.log_signal.emit(f"RA: Resposta inesperada '{payload_ra}'. Retentando RA ({attempt+1}/3)...")
+                    except Exception as e:
+                        self.log_signal.emit(f"RA: Erro na tentativa {attempt+1}/3: {e}")
+                    
+                    if attempt < 2: time.sleep(0.2)
+
+                if not payload_ra.startswith("01+RA+"):
+                    raise Exception("Falha ao obter RA válido após 3 tentativas.")
+
                 self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
 
                 if payload_ra.startswith("01+RA+047"):
-                    self.finished_signal.emit(False, "Equipamento bloqueado (Erro 047)", None, b"")
+                    self.finished_signal.emit(False, "Equipamento bloqueado (Erro 047)", None, b"", None)
                     sock.close()
                     return
 
                 rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
                 n, e, mod_b64 = rsa_pubkey_data
+                rsa_key_data = (n, e)
 
                 session_key = EvoRepCrypto.generate_aes_key()
 
@@ -82,10 +102,10 @@ class NetworkWorker(QThread):
                 self.log_signal.emit(f"Payload EA recebido: {payload_ea}")
 
                 if payload_ea.startswith("01+EA+000"):
-                    self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key)
+                    self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key, rsa_key_data)
                     return
                 elif payload_ea.startswith("01+EA+009"):
-                    self.finished_signal.emit(False, "Usuário ou senha inválidos. (Erro 009)", None, b"")
+                    self.finished_signal.emit(False, "Usuário ou senha inválidos. (Erro 009)", None, b"", None)
                     sock.close()
                     return
                 else:
@@ -104,14 +124,14 @@ class NetworkWorker(QThread):
                     time.sleep(0.05)
 
         if not self.running:
-            self.finished_signal.emit(False, "Operação cancelada pelo usuário.", None, b"")
+            self.finished_signal.emit(False, "Operação cancelada pelo usuário.", None, b"", None)
         else:
-            self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"")
+            self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"", None)
 
 
 class ClientNetworkWorker(QThread):
     log_signal      = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str, object, bytes)
+    finished_signal = pyqtSignal(bool, str, object, bytes, object)
     sent_signal = pyqtSignal(str)
     sent_bytes_signal = pyqtSignal(str)
     received_signal = pyqtSignal(str)
@@ -157,16 +177,34 @@ class ClientNetworkWorker(QThread):
                 try:
                     self.log_signal.emit(f"Conexão recebida de {addr}. Iniciando handshake...")
 
-                    ra_payload = "01+RA+00"
-                    ra_packet = EvoRepProtocol.pack(ra_payload)
-                    self.sent_signal.emit(ra_payload)
-                    self.sent_bytes_signal.emit(ra_packet.hex(' '))
-                    sock.sendall(ra_packet)
+                    # 🔹 NOVO: Loop de retentativas para o comando RA dentro do mesmo socket
+                    payload_ra = ""
+                    for attempt in range(3):
+                        if not self.running: break
+                        try:
+                            ra_payload = "01+RA+00"
+                            ra_packet = EvoRepProtocol.pack(ra_payload)
+                            self.sent_signal.emit(ra_payload)
+                            self.sent_bytes_signal.emit(ra_packet.hex(' '))
+                            sock.sendall(ra_packet)
 
-                    resp_data = EvoRepProtocol.receive_full(sock)
-                    payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
-                    self.received_signal.emit(payload_ra)
-                    self.received_bytes_signal.emit(resp_data.hex(' '))
+                            resp_data = EvoRepProtocol.receive_full(sock)
+                            payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                            self.received_signal.emit(payload_ra)
+                            self.received_bytes_signal.emit(resp_data.hex(' '))
+
+                            if payload_ra.startswith("01+RA+"):
+                                break # Sucesso
+                            else:
+                                self.log_signal.emit(f"RA: Resposta inesperada '{payload_ra}'. Retentando RA ({attempt+1}/3)...")
+                        except Exception as e:
+                            self.log_signal.emit(f"RA: Erro na tentativa {attempt+1}/3: {e}")
+                        
+                        if attempt < 2: time.sleep(0.2)
+
+                    if not payload_ra.startswith("01+RA+"):
+                        raise Exception("Falha ao obter RA válido após 3 tentativas.")
+
                     self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
 
                     if payload_ra.startswith("01+RA+047"):
@@ -174,7 +212,7 @@ class ClientNetworkWorker(QThread):
                         if self.server_sock:
                             self.server_sock.close()
                             self.server_sock = None
-                        self.finished_signal.emit(False, "Equipamento bloqueado (Erro 047)", None, b"")
+                        self.finished_signal.emit(False, "Equipamento bloqueado (Erro 047)", None, b"", None)
                         sock.close()
                         return
 
@@ -206,10 +244,10 @@ class ClientNetworkWorker(QThread):
                         if self.server_sock:
                             self.server_sock.close()
                             self.server_sock = None
-                        self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key)
+                        self.finished_signal.emit(True, "Autenticação EA realizada com sucesso.", sock, session_key, (n, e))
                         return
                     elif payload_ea.startswith("01+EA+009"):
-                        self.finished_signal.emit(False, "Usuário ou senha inválidos. (Erro 009)", None, b"")
+                        self.finished_signal.emit(False, "Usuário ou senha inválidos. (Erro 009)", None, b"", None)
                         sock.close()
                         return
                     else:
@@ -225,7 +263,7 @@ class ClientNetworkWorker(QThread):
         except Exception as e:
             if self.running:
                 self.log_signal.emit(f"Erro fatal no servidor: {e}")
-                self.finished_signal.emit(False, str(e), None, b"")
+                self.finished_signal.emit(False, str(e), None, b"", None)
         finally:
             if self.server_sock:
                 try: self.server_sock.close()
@@ -234,7 +272,7 @@ class ClientNetworkWorker(QThread):
 
 class F3NetworkWorker(QThread):
     log_signal      = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str, object, bytes)
+    finished_signal = pyqtSignal(bool, str, object, bytes, object)
     auto_sent_signal = pyqtSignal(str, bytes)
 
     def __init__(self, ip: str, port: int, parent=None):
@@ -262,12 +300,12 @@ class F3NetworkWorker(QThread):
             sock.sendall(rb_packet)
             self.auto_sent_signal.emit(rb_payload, rb_packet)
 
-            self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"")
+            self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"", None)
 
         except Exception as e:
             if self.running:
                 self.log_signal.emit(f"F3: Falha na conexão: {e}")
-                self.finished_signal.emit(False, str(e), None, b"")
+                self.finished_signal.emit(False, str(e), None, b"", None)
             if sock:
                 try: sock.close()
                 except: pass
@@ -299,6 +337,64 @@ class CommandWorker(QThread):
             self.finished_signal.emit(True, 'Comando enviado. Aguardando resposta em tempo real...')
         except Exception as e:
             self.finished_signal.emit(False, f'Erro ao enviar comando: {e}')
+
+
+class DeauthWorker(QThread):
+    """
+    Worker para realizar o Deauth antes da desconexão.
+    Envia 01+EA+00+<rsa_blob> onde a credencial começa com '0]'.
+    """
+    sent_signal           = pyqtSignal(str)
+    sent_bytes_signal     = pyqtSignal(str)
+    received_signal       = pyqtSignal(str)
+    received_bytes_signal = pyqtSignal(str)
+    finished_signal       = pyqtSignal()
+
+    def __init__(self, sock: socket.socket, rsa_key: tuple, user: str, password: str, session_key: bytes, parent=None):
+        super().__init__(parent)
+        self.sock = sock
+        self.rsa_key = rsa_key
+        self.user = user
+        self.password = password
+        self.session_key = session_key
+
+    def run(self):
+        try:
+            if not self.sock or not self.rsa_key:
+                return
+
+            session_key_b64 = base64.b64encode(self.session_key).decode("utf-8")
+            # 🔹 REQUISITO: Prefixar com '0]' para finalizar comunicação criptografada
+            credential = f"0]{self.user}]{self.password}]{session_key_b64}"
+
+            encrypted = EvoRepCrypto.encrypt_credentials_with_rsa(self.rsa_key, credential)
+            encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
+
+            ea_payload = f"01+EA+00+{encrypted_b64}"
+            ea_packet = EvoRepProtocol.pack(ea_payload)
+
+            self.sent_signal.emit(ea_payload)
+            self.sent_bytes_signal.emit(ea_packet.hex(' '))
+
+            self.sock.settimeout(1.0) # Aguarda até 1s pela resposta do Deauth
+            self.sock.sendall(ea_packet)
+            
+            # 🔹 NOVO: Tenta receber a resposta do EA de desconexão
+            try:
+                resp_data = EvoRepProtocol.receive_full(self.sock, timeout=1.0)
+                if resp_data:
+                    payload_ea = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                    # Emitimos para que apareça na UI (o main.py precisa estar conectado a este sinal)
+                    if hasattr(self, "received_signal"):
+                        self.received_signal.emit(payload_ea)
+                    if hasattr(self, "received_bytes_signal"):
+                        self.received_bytes_signal.emit(resp_data.hex(' '))
+            except:
+                pass
+        except:
+            pass
+        finally:
+            self.finished_signal.emit()
 
 
 class ListenerWorker(QThread):

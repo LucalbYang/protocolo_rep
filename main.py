@@ -24,7 +24,7 @@ from utils import resource_path, generate_cpf, generate_random_name, get_local_i
 from evo_protocol import EvoRepProtocol
 from evo_crypto import EvoRepCrypto
 from workers import (NetworkWorker, ClientNetworkWorker, F3NetworkWorker, 
-                     CommandWorker, ListenerWorker)
+                     CommandWorker, ListenerWorker, DeauthWorker)
 from widgets import NoScrollComboBox, NotificationCard, HeaderBar
 from macro import MacroWindow
 
@@ -40,6 +40,7 @@ class EvoRepAuthApp(QWidget):
             "main_": {
                 "persistent_sock": None,
                 "session_key": None,
+                "rsa_key": None,
                 "connected": False,
                 "worker": None,
                 "listener_worker": None,
@@ -51,6 +52,7 @@ class EvoRepAuthApp(QWidget):
             "client_": {
                 "persistent_sock": None,
                 "session_key": None,
+                "rsa_key": None,
                 "connected": False,
                 "worker": None,
                 "listener_worker": None,
@@ -62,6 +64,7 @@ class EvoRepAuthApp(QWidget):
             "f3_": {
                 "persistent_sock": None,
                 "session_key": None,
+                "rsa_key": None,
                 "connected": False,
                 "worker": None,
                 "listener_worker": None,
@@ -74,6 +77,7 @@ class EvoRepAuthApp(QWidget):
             "test_": {
                 "persistent_sock": None,
                 "session_key": None,
+                "rsa_key": None,
                 "connected": False,
                 "worker": None,
                 "listener_worker": None,
@@ -2266,7 +2270,7 @@ class EvoRepAuthApp(QWidget):
             state["worker"].sent_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_sent_bytes(hex_txt, p))
             state["worker"].received_signal.connect(lambda txt, p=prefix: self.append_received(txt, p))
             state["worker"].received_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_received_bytes(hex_txt, p))
-        state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
+        state["worker"].finished_signal.connect(lambda s, m, sk, key, rsa: self.on_finished(s, m, sk, key, rsa, prefix))
         state["worker"].start()
 
     def disconnect_equipment_only(self, prefix):
@@ -2360,6 +2364,33 @@ class EvoRepAuthApp(QWidget):
             if macro_window:
                 macro_window.close()
 
+        # 🔹 REQUISITO: Realizar Deauth antes de fechar a conexão se for uma aba criptografada
+        if state["connected"] and prefix in ("main_", "client_", "test_") and state["persistent_sock"] and state["rsa_key"]:
+            self.append_log(f"Encerrando criptografia ({prefix})...")
+            
+            # Nas abas criptografadas, precisamos do usuário/senha para o blob RSA do deauth
+            target_prefix = "main_" if prefix == "test_" else prefix
+            user = getattr(self, f"{target_prefix}user_input").text().strip()
+            password = getattr(self, f"{target_prefix}password_input").text().strip()
+
+            deauth = DeauthWorker(state["persistent_sock"], state["rsa_key"], user, password, state["session_key"])
+            self.external_workers.append(deauth)
+            deauth.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+            deauth.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
+            # 🔹 NOVO: Conecta sinais de recebimento para o Deauth
+            deauth.received_signal.connect(lambda txt: self.append_received(txt, prefix))
+            deauth.received_bytes_signal.connect(lambda hex_txt: self.append_received_bytes(hex_txt, prefix))
+            
+            deauth.finished_signal.connect(lambda: self._final_disconnect(prefix))
+            deauth.finished_signal.connect(lambda: self.external_workers.remove(deauth) if deauth in self.external_workers else None)
+            deauth.start()
+            state["connected"] = False
+            return
+
+        self._final_disconnect(prefix)
+
+    def _final_disconnect(self, prefix):
+        state = self.tab_data[prefix]
         if state["listener_worker"]:
             state["listener_worker"].stop()
             if state["persistent_sock"]:
@@ -2384,6 +2415,7 @@ class EvoRepAuthApp(QWidget):
             state["persistent_sock"] = None
 
         state["session_key"] = None
+        state["rsa_key"]     = None
         state["connected"]   = False
 
         if prefix == "main_":
@@ -2418,7 +2450,7 @@ class EvoRepAuthApp(QWidget):
         self.append_log(f"Erro na escuta ({prefix}): {error_msg}")
         self.disconnect(prefix)
 
-    def on_finished(self, success: bool, message: str, sock, session_key, prefix):
+    def on_finished(self, success: bool, message: str, sock, session_key, rsa_key, prefix):
         if prefix == "main_":
             self.connect_timer.stop()
             self.dot_count = 0
@@ -2429,6 +2461,7 @@ class EvoRepAuthApp(QWidget):
         if success:
             state["persistent_sock"] = sock
             state["session_key"]     = session_key
+            state["rsa_key"]         = rsa_key
             state["connected"]       = True
 
             if prefix == "main_":
