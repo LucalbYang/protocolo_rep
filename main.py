@@ -306,6 +306,12 @@ class EvoRepAuthApp(QWidget):
             self.f3_connect_button.setObjectName("primary_btn")
             self.f3_connect_button.clicked.connect(self.on_connect_clicked)
             conn_layout.addWidget(self.f3_connect_button, 2, 0, 1, 2)
+            
+            # 🔹 REQUISITO: Aviso em vermelho abaixo do botão Conectar na F3
+            self.f3_connection_warning = QLabel("")
+            self.f3_connection_warning.setStyleSheet("color: #E74C3C; font-weight: bold; font-size: 11px;")
+            self.f3_connection_warning.setWordWrap(True)
+            conn_layout.addWidget(self.f3_connection_warning, 3, 0, 1, 2)
 
         else:
             self.main_connect_button = QPushButton("Conectar")
@@ -573,7 +579,8 @@ class EvoRepAuthApp(QWidget):
         self.btn_choose_afd_path.setMinimumHeight(25)
         self.btn_choose_afd_path.clicked.connect(self.on_choose_afd_path)
 
-        self.btn_gerar_afd = QPushButton("Gerar AFD")
+        # 🔹 REQUISITO: Texto inicial indicativo
+        self.btn_gerar_afd = QPushButton("Gerar AFD - Escolha pasta para liberar")
         self.btn_gerar_afd.setObjectName("primary_btn")
         self.btn_gerar_afd.setEnabled(False)
         self.btn_gerar_afd.setMinimumHeight(25)
@@ -595,10 +602,61 @@ class EvoRepAuthApp(QWidget):
 
         # Layout Principal da aba
         layout.addLayout(top_boxes_layout)
+        
+        # 🔹 REQUISITO: Label de aviso em vermelho no canto inferior esquerdo
+        bottom_layout = QHBoxLayout()
+        self.test_connection_warning = QLabel("")
+        self.test_connection_warning.setStyleSheet("color: #E74C3C; font-weight: bold; font-size: 11px;")
+        bottom_layout.addWidget(self.test_connection_warning)
+        bottom_layout.addStretch()
+        
         layout.addStretch()
+        layout.addLayout(bottom_layout)
 
         return tab
 
+    def update_dependent_tabs_state(self):
+        """Atualiza o estado das abas F3 e F5 baseado na conexão da F1."""
+        is_f1_connected = self.tab_data["main_"]["connected"]
+        is_test_active = getattr(self, "is_test_running", False)
+
+        # ── LÓGICA PARA ABA F5 (TESTES) ──────────────────────────
+        if hasattr(self, "test_connection_warning"):
+            # Só mostra o aviso se a F1 estiver conectada MANUALMENTE (não via teste)
+            if is_f1_connected and not is_test_active:
+                self.test_connection_warning.setText("⚠️ Desconecte na aba F1 para liberar os testes.")
+            else:
+                self.test_connection_warning.setText("")
+
+            # 🔹 REQUISITO: Botões liberados se F1 desconectada OU se for conexão de teste ativo
+            # Isso permite adicionar itens à fila mesmo com teste rodando.
+            base_interact = not is_f1_connected or is_test_active
+
+            # Helper para saber se o botão específico já está na fila
+            def is_in_queue(btn):
+                return any(item[1] == btn for item in getattr(self, "test_queue", []))
+
+            self.btn_user_padrao.setEnabled(base_interact and not is_in_queue(self.btn_user_padrao))
+            self.btn_empregador.setEnabled(base_interact and not is_in_queue(self.btn_empregador))
+            self.btn_colab_teste.setEnabled(base_interact and not is_in_queue(self.btn_colab_teste))
+            self.btn_choose_afd_path.setEnabled(base_interact) # Escolher pasta sempre livre se base_interact
+
+            # Gerar AFD também entra na fila
+            if not base_interact or is_in_queue(self.btn_gerar_afd):
+                self.btn_gerar_afd.setEnabled(False)
+            else:
+                self.btn_gerar_afd.setEnabled(bool(self.afd_save_path))
+        # ── LÓGICA PARA ABA F3 (DESBLOQUEIO) ──────────────────────
+        if hasattr(self, "f3_connection_warning"):
+            if is_f1_connected:
+                self.f3_connection_warning.setText("⚠️ Desconecte na aba F1 para realizar o desbloqueio F3.")
+                self.f3_connect_button.setEnabled(False)
+            else:
+                self.f3_connection_warning.setText("")
+                # Se não está conectada, habilita apenas se não houver um worker de conexão rodando
+                state_f3 = self.tab_data["f3_"]
+                if not state_f3["connected"]:
+                    self.f3_connect_button.setEnabled(True)
     def on_choose_afd_path(self):
         from PyQt6.QtWidgets import QFileDialog
         last_dir = self.settings.value("afd_last_dir", os.path.expanduser("~"))
@@ -608,6 +666,7 @@ class EvoRepAuthApp(QWidget):
             self.afd_save_path = folder
             self.settings.setValue("afd_last_dir", folder)
             self.btn_gerar_afd.setEnabled(True)
+            self.btn_gerar_afd.setText("Gerar AFD") # 🔹 Restaura o texto original ao liberar
             self.append_log(f"ABA TESTES (F5): Pasta para AFD definida: {folder}")
 
     def update_loading_animations(self):
@@ -2317,9 +2376,9 @@ class EvoRepAuthApp(QWidget):
                 except:
                     pass
 
-        getattr(self, f"{prefix}send_button").setEnabled(False)
         self.set_inputs_enabled(True, prefix)
         self.append_log(f"Equipamento desconectado. Servidor permanece ativo ({prefix}).")
+        self.update_dependent_tabs_state()
 
     def on_f3_auto_sent(self, text, packet_bytes):
         self.append_sent(text, "f3_")
@@ -2439,9 +2498,9 @@ class EvoRepAuthApp(QWidget):
             self.f3_rep_num_field.clear()
             self.f3_unlock_code_field.clear()
 
-        getattr(self, f"{prefix}send_button").setEnabled(False)
         self.set_inputs_enabled(True, prefix)
         self.append_log(f"Estado resetado ({prefix}).")
+        self.update_dependent_tabs_state()
 
     def on_listener_error(self, error_msg, prefix):
         self.append_log(f"Erro na escuta ({prefix}): {error_msg}")
@@ -2506,7 +2565,7 @@ class EvoRepAuthApp(QWidget):
                     if cmd:
                         QTimer.singleShot(500, lambda: self._send_raw_command("main_", cmd))
             
-            elif prefix != "f3_":
+            elif prefix != "f3_" and not self.test_mode:
                 QMessageBox.information(self, "Conexão", f"Conexão bem sucedida ({prefix})")
 
         else:
@@ -2547,7 +2606,11 @@ class EvoRepAuthApp(QWidget):
 
             if "10013" in message or "10048" in message:
                 message = "Soquete em uso por outra aplicação"
-            QMessageBox.critical(self, "Erro de Conexão", message)
+            
+            if not self.test_mode:
+                QMessageBox.critical(self, "Erro de Conexão", message)
+
+        self.update_dependent_tabs_state()
 
 
 # ══════════════════════════════════════════════════════════════════════
