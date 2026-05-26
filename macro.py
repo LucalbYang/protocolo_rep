@@ -4,7 +4,7 @@ import random
 from PyQt6.QtCore import Qt, QTimer, QSettings
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QGroupBox, QFormLayout, 
-                             QFrame, QMessageBox)
+                             QFrame, QMessageBox, QRadioButton, QButtonGroup)
 from utils import generate_cpf, generate_random_name
 
 class MacroWindow(QWidget):
@@ -57,6 +57,27 @@ class MacroWindow(QWidget):
 
         layout.addWidget(delete_group_box)
 
+        # ── Deletar Todas as Biometrias ───────────────────────────
+        bio_group_box = QGroupBox("Deletar Todas as biometrias")
+        bio_layout = QVBoxLayout(bio_group_box)
+        bio_layout.setSpacing(6)
+        bio_layout.setContentsMargins(10, 14, 10, 10)
+
+        radio_layout = QHBoxLayout()
+        self.radio_unica = QRadioButton("ÚNICA")
+        self.radio_dual = QRadioButton("DUAL")
+        self.radio_unica.setChecked(True)
+        radio_layout.addWidget(self.radio_unica)
+        radio_layout.addWidget(self.radio_dual)
+        
+        self.btn_delete_all_bio = QPushButton("Deletar Todas")
+        self.btn_delete_all_bio.setObjectName("danger_btn")
+
+        bio_layout.addLayout(radio_layout)
+        bio_layout.addWidget(self.btn_delete_all_bio)
+
+        layout.addWidget(bio_group_box)
+
         # ── Status (linha única) ──────────────────────────────────
         status_frame = QFrame()
         status_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -84,6 +105,7 @@ class MacroWindow(QWidget):
         self.btn_sequential.clicked.connect(self.on_sequential_clicked)
         self.btn_delete_last.clicked.connect(self.on_delete_last_clicked)
         self.btn_delete_rep.clicked.connect(self.on_delete_rep_clicked)
+        self.btn_delete_all_bio.clicked.connect(self.on_delete_all_bio_clicked)
 
         self.is_running = False
         self.is_deleting = False
@@ -93,6 +115,12 @@ class MacroWindow(QWidget):
         self.target_delete_count = 0
         self.current_ru_index = 0
         self.delete_chunks = []
+        self.is_deleting_bio = False
+        self.bio_delete_phase = ""
+        self.bio_total = 0
+        self.bio_current_index = 0
+        self.bio_matriculas = []
+        self.bio_type = "UNICA"
 
     def closeEvent(self, event):
         self.settings.setValue(f"geometry_{self.prefix}", self.saveGeometry())
@@ -108,9 +136,13 @@ class MacroWindow(QWidget):
         self.queue = []
         self.is_running = False
         self.is_deleting = False
+        self.is_deleting_bio = False
         self.btn_bulk.setEnabled(True)
         self.btn_sequential.setEnabled(True)
         self.btn_delete_rep.setEnabled(True)
+        self.btn_delete_all_bio.setEnabled(True)
+        self.radio_unica.setEnabled(True)
+        self.radio_dual.setEnabled(True)
 
     def log(self, msg):
         self.status_label.setText(msg)
@@ -123,7 +155,7 @@ class MacroWindow(QWidget):
         }
 
     def on_bulk_clicked(self):
-        if self.is_running or self.is_deleting: return
+        if self.is_running or self.is_deleting or self.is_deleting_bio: return
         try:
             count = int(self.count_input.text())
         except:
@@ -143,7 +175,7 @@ class MacroWindow(QWidget):
         self.btn_delete_last.setVisible(True)
 
     def on_sequential_clicked(self):
-        if self.is_running or self.is_deleting: return
+        if self.is_running or self.is_deleting or self.is_deleting_bio: return
         try:
             count = int(self.count_input.text())
         except:
@@ -175,7 +207,7 @@ class MacroWindow(QWidget):
         self.log(f"Enviando ({len(self.queue)} restantes): {emp['nome']}")
 
     def on_delete_last_clicked(self):
-        if not self.last_generated_ids or self.is_deleting: return
+        if not self.last_generated_ids or self.is_deleting or self.is_deleting_bio: return
 
         count = len(self.last_generated_ids)
         parts = [f"E[{id_val}]" for id_val in self.last_generated_ids]
@@ -187,7 +219,7 @@ class MacroWindow(QWidget):
         self.last_generated_ids = []
 
     def on_delete_rep_clicked(self):
-        if self.is_running or self.is_deleting: return
+        if self.is_running or self.is_deleting or self.is_deleting_bio: return
         try:
             self.target_delete_count = int(self.delete_count_input.text())
             if self.target_delete_count <= 0: raise ValueError()
@@ -248,6 +280,53 @@ class MacroWindow(QWidget):
         self.btn_sequential.setEnabled(True)
         self.btn_delete_rep.setEnabled(True)
 
+    def on_delete_all_bio_clicked(self):
+        if self.is_running or self.is_deleting or self.is_deleting_bio: return
+        
+        self.is_deleting_bio = True
+        self.bio_delete_phase = "quantity"
+        self.bio_type = "UNICA" if self.radio_unica.isChecked() else "DUAL"
+        
+        self.btn_bulk.setEnabled(False)
+        self.btn_sequential.setEnabled(False)
+        self.btn_delete_rep.setEnabled(False)
+        self.btn_delete_all_bio.setEnabled(False)
+        self.radio_unica.setEnabled(False)
+        self.radio_dual.setEnabled(False)
+
+        # 1. Coletar quantidade de biometrias
+        command_str = "01+RQ+00+D"
+        self.parent_app.send_external_command(command_str, self.prefix)
+        self.log("Coletando quantidade de biometrias...")
+
+    def request_next_bio_matriculas(self):
+        if self.bio_type == "UNICA":
+            cmd = f"01+RD+00+L]100}}{self.bio_current_index}"
+        else:
+            cmd = f"01+RD+00+L]D]100}}{self.bio_current_index}"
+            
+        self.parent_app.send_external_command(cmd, self.prefix)
+        
+    def send_next_bio_delete(self):
+        if not self.bio_matriculas:
+            self.log("Exclusão de biometrias concluída.")
+            self.finish_bio_deletion()
+            return
+            
+        mat = self.bio_matriculas.pop(0)
+        cmd = f"01+ED+00+E]{mat}"
+        self.parent_app.send_external_command(cmd, self.prefix)
+        self.log(f"Deletando biometria matrícula {mat} ({len(self.bio_matriculas)} restantes)...")
+
+    def finish_bio_deletion(self):
+        self.is_deleting_bio = False
+        self.btn_bulk.setEnabled(True)
+        self.btn_sequential.setEnabled(True)
+        self.btn_delete_rep.setEnabled(True)
+        self.btn_delete_all_bio.setEnabled(True)
+        self.radio_unica.setEnabled(True)
+        self.radio_dual.setEnabled(True)
+
     def handle_response(self, text):
         if self.is_running:
             QTimer.singleShot(100, self.send_next_in_queue)
@@ -277,3 +356,56 @@ class MacroWindow(QWidget):
 
             elif "+EU+" in text:
                 QTimer.singleShot(100, self.send_next_delete_chunk)
+
+        if self.is_deleting_bio:
+            if self.bio_delete_phase == "quantity":
+                # Resposta esperada: 01+RQ+000+D]{biometrias}
+                if "+RQ+" in text and ("+D]" in text or "+D}" in text or "+D" in text):
+                    try:
+                        data_part = text.split("+D", 1)[1]
+                        # Remove non-numeric prefixes/suffixes from the data part just to be clean
+                        # Extract all numbers and sum them
+                        nums = re.findall(r'\d+', data_part)
+                        self.bio_total = sum(int(n) for n in nums)
+                    except Exception as e:
+                        self.log("Erro ao ler quantidade de biometrias.")
+                        self.finish_bio_deletion()
+                        return
+                        
+                    if self.bio_total == 0:
+                        self.log("Nenhuma biometria cadastrada.")
+                        self.finish_bio_deletion()
+                        return
+                    
+                    self.log(f"Quantidade de biometrias: {self.bio_total}. Coletando matrículas...")
+                    self.bio_current_index = 0
+                    self.bio_matriculas = []
+                    self.bio_delete_phase = "matriculas"
+                    QTimer.singleShot(100, self.request_next_bio_matriculas)
+                    return
+            elif self.bio_delete_phase == "matriculas":
+                if "+RD+" in text and "+L]" in text:
+                    data_part = text.split("+L]", 1)[1]
+                    if data_part.startswith("D}") or data_part.startswith("D]"):
+                        data_part = data_part[2:]
+                        
+                    mats = re.split(r'[\]\}]', data_part)
+                    mats = [m.strip() for m in mats if m.strip()]
+                    
+                    self.bio_matriculas.extend(mats)
+                    self.bio_matriculas = list(dict.fromkeys(self.bio_matriculas))
+                    
+                    self.log(f"Coletadas {len(self.bio_matriculas)} matrículas...")
+                    
+                    self.bio_current_index += 100
+                    if self.bio_current_index < self.bio_total:
+                        QTimer.singleShot(100, self.request_next_bio_matriculas)
+                    else:
+                        self.log(f"Total de matrículas coletadas: {len(self.bio_matriculas)}. Iniciando exclusão...")
+                        self.bio_delete_phase = "delete"
+                        QTimer.singleShot(100, self.send_next_bio_delete)
+                    return
+
+            elif self.bio_delete_phase == "delete":
+                QTimer.singleShot(100, self.send_next_bio_delete)
+                return

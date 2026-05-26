@@ -2148,7 +2148,7 @@ class EvoRepAuthApp(QWidget):
         # 🔹 REQUISITO: Se houver macro rodando, notificar a janela
         if hasattr(self, f"{prefix}macro_window"):
             window = getattr(self, f"{prefix}macro_window")
-            if window.is_running or getattr(window, 'is_deleting', False):
+            if window.is_running or getattr(window, 'is_deleting', False) or getattr(window, 'is_deleting_bio', False):
                 window.handle_response(text)
 
         # 🔹 Lógica especial para processar resposta RB na aba F3
