@@ -346,8 +346,6 @@ class DeauthWorker(QThread):
     """
     sent_signal           = pyqtSignal(str)
     sent_bytes_signal     = pyqtSignal(str)
-    received_signal       = pyqtSignal(str)
-    received_bytes_signal = pyqtSignal(str)
     finished_signal       = pyqtSignal()
 
     def __init__(self, sock: socket.socket, rsa_key: tuple, user: str, password: str, session_key: bytes, parent=None):
@@ -376,21 +374,10 @@ class DeauthWorker(QThread):
             self.sent_signal.emit(ea_payload)
             self.sent_bytes_signal.emit(ea_packet.hex(' '))
 
-            self.sock.settimeout(1.0) # Aguarda até 1s pela resposta do Deauth
+            self.sock.settimeout(0.5)
             self.sock.sendall(ea_packet)
             
-            # 🔹 NOVO: Tenta receber a resposta do EA de desconexão
-            try:
-                resp_data = EvoRepProtocol.receive_full(self.sock, timeout=1.0)
-                if resp_data:
-                    payload_ea = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
-                    # Emitimos para que apareça na UI (o main.py precisa estar conectado a este sinal)
-                    if hasattr(self, "received_signal"):
-                        self.received_signal.emit(payload_ea)
-                    if hasattr(self, "received_bytes_signal"):
-                        self.received_bytes_signal.emit(resp_data.hex(' '))
-            except:
-                pass
+            # 🔹 REQUISITO: Ignora resposta e finaliza imediatamente
         except:
             pass
         finally:

@@ -2377,9 +2377,6 @@ class EvoRepAuthApp(QWidget):
             self.external_workers.append(deauth)
             deauth.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
             deauth.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
-            # 🔹 NOVO: Conecta sinais de recebimento para o Deauth
-            deauth.received_signal.connect(lambda txt: self.append_received(txt, prefix))
-            deauth.received_bytes_signal.connect(lambda hex_txt: self.append_received_bytes(hex_txt, prefix))
             
             deauth.finished_signal.connect(lambda: self._final_disconnect(prefix))
             deauth.finished_signal.connect(lambda: self.external_workers.remove(deauth) if deauth in self.external_workers else None)
