@@ -1828,10 +1828,17 @@ class EvoRepAuthApp(QWidget):
             elif cmd_code.startswith("RD_"):
                 if cmd_code == "RD_LISTA":
                     radio_group = self.param_inputs.get("ListaTipo")
-                    tipo        = "L]D" if radio_group and radio_group.checkedButton().text() == "DUAL" else "L"
+                    is_dual     = radio_group and radio_group.checkedButton().text() == "DUAL"
                     qty         = self.param_inputs.get("Quantidade").text().strip()
                     idx         = self.param_inputs.get("Indice").text().strip()
-                    command_str = f"01+RD+00+{tipo}]{qty}}}{idx}"
+                    
+                    if is_dual:
+                        command_str = [
+                            f"01+RD+00+L]D]{qty}}}{idx}",
+                            f"01+RD+00+L]F]{qty}}}{idx}"
+                        ]
+                    else:
+                        command_str = f"01+RD+00+L]{qty}}}{idx}"
                 elif cmd_code == "RD_QTD":
                     mat         = self.param_inputs.get("Matricula").text().strip()
                     command_str = f"01+RD+00+Q]{mat}"

@@ -316,24 +316,27 @@ class CommandWorker(QThread):
     sent_bytes_signal = pyqtSignal(str)
     finished_signal   = pyqtSignal(bool, str)
 
-    def __init__(self, sock: socket.socket, command: str, session_key: bytes, parent=None):
+    def __init__(self, sock: socket.socket, command, session_key: bytes, parent=None):
         super().__init__(parent)
         self.sock = sock
-        self.command = command
+        self.commands = command if isinstance(command, list) else [command]
         self.session_key = session_key
 
     def run(self):
         try:
-            if self.session_key:
-                encrypted_command = EvoRepCrypto.encrypt_aes(self.session_key, self.command)
-                packet = EvoRepProtocol.pack(encrypted_command)
-            else:
-                packet = EvoRepProtocol.pack(self.command)
+            for cmd in self.commands:
+                if self.session_key:
+                    encrypted_command = EvoRepCrypto.encrypt_aes(self.session_key, cmd)
+                    packet = EvoRepProtocol.pack(encrypted_command)
+                else:
+                    packet = EvoRepProtocol.pack(cmd)
 
-            self.sent_signal.emit(self.command)
-            self.sent_bytes_signal.emit(packet.hex(' '))
+                self.sent_signal.emit(cmd)
+                self.sent_bytes_signal.emit(packet.hex(' '))
 
-            self.sock.sendall(packet)
+                self.sock.sendall(packet)
+                time.sleep(0.1)  # small delay for sequential commands
+
             self.finished_signal.emit(True, 'Comando enviado. Aguardando resposta em tempo real...')
         except Exception as e:
             self.finished_signal.emit(False, f'Erro ao enviar comando: {e}')
