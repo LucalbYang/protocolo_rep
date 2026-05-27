@@ -319,10 +319,23 @@ class EvoRepAuthApp(QWidget):
             conn_layout.addWidget(self.f3_connection_warning, 3, 0, 1, 2)
 
         else:
+            self.main_connect_layout = QHBoxLayout()
+            self.main_connect_layout.setContentsMargins(0, 0, 0, 0)
+            self.main_connect_layout.setSpacing(5)
+
             self.main_connect_button = QPushButton("Conectar")
             self.main_connect_button.setObjectName("primary_btn")
             self.main_connect_button.clicked.connect(self.on_connect_clicked)
-            conn_layout.addWidget(self.main_connect_button, 4, 0, 1, 2)
+
+            self.main_cancel_button = QPushButton("🗙")
+            self.main_cancel_button.setObjectName("cancel_btn")
+            self.main_cancel_button.setVisible(False)
+            self.main_cancel_button.setToolTip("Cancelar conexão")
+            self.main_cancel_button.clicked.connect(self.on_cancel_connect_clicked)
+
+            self.main_connect_layout.addWidget(self.main_connect_button, 8)
+            self.main_connect_layout.addWidget(self.main_cancel_button, 2)
+            conn_layout.addLayout(self.main_connect_layout, 4, 0, 1, 2)
 
             # 🔹 REQUISITO: Botão Macro (F1)
             macro_btn = QPushButton("Macro")
@@ -2297,6 +2310,13 @@ class EvoRepAuthApp(QWidget):
         dots = "." * self.dot_count
         self.main_connect_button.setText(f"Conectando{dots}")
 
+    def on_cancel_connect_clicked(self):
+        prefix = "main_"
+        state = self.tab_data[prefix]
+        if state["worker"] and state["worker"].isRunning():
+            state["worker"].stop()
+            self.append_log("Cancelando conexão...")
+
     def on_send_command_finished(self, success: bool, message: str):
         self.append_log(message)
         prefix = self._get_active_prefix()
@@ -2366,6 +2386,7 @@ class EvoRepAuthApp(QWidget):
 
         if prefix == "main_":
             self.main_connect_button.setEnabled(False)
+            self.main_cancel_button.setVisible(True)
             self.connect_timer.start(350)
             state["worker"] = NetworkWorker(ip, port, user, password)
 
@@ -2537,6 +2558,7 @@ class EvoRepAuthApp(QWidget):
 
         if prefix == "main_":
             self.connect_timer.stop()
+            self.main_cancel_button.setVisible(False)
             self.main_connect_button.setText("Conectar")
             self.main_connect_button.setObjectName("primary_btn")
             self.main_connect_button.setEnabled(True)
@@ -2570,6 +2592,7 @@ class EvoRepAuthApp(QWidget):
     def on_finished(self, success: bool, message: str, sock, session_key, rsa_key, prefix):
         if prefix == "main_":
             self.connect_timer.stop()
+            self.main_cancel_button.setVisible(False)
             self.dot_count = 0
 
         self.append_log(message)

@@ -198,7 +198,25 @@ QPushButton#disconnect_btn:pressed {{
     color: #FFFFFF;
 }}
 
+/* ── CANCEL BUTTON ───────────────────────────────────── */
+QPushButton#cancel_btn {{
+    background-color: {danger};
+    color: #FFFFFF;
+    border: none;
+    border-radius: 7px;
+    padding: 7px 5px;
+    font-weight: 700;
+    font-size: 13px;
+}}
+QPushButton#cancel_btn:hover {{
+    background-color: {danger_h};
+}}
+QPushButton#cancel_btn:pressed {{
+    background-color: {danger_h};
+}}
+
 /* ── DANGER BUTTON ────────────────────────────────────── */
+
 QPushButton#danger_btn {{
     background-color: transparent;
     color: {danger};
