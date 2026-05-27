@@ -37,15 +37,17 @@ class NetworkWorker(QThread):
                 self.log_signal.emit(f"Tentando conectar a {self.ip}:{self.port}...")
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.settimeout(2)
-                sock.connect((ip_val := self.ip, port_val := self.port))
+                sock.settimeout(1) # Reduzido para 1s para ser mais responsivo no handshake
+                sock.connect((self.ip, self.port))
 
                 self.log_signal.emit("Conexão estabelecida. Iniciando handshake...")
 
-                # 🔹 NOVO: Loop de retentativas para o comando RA dentro do mesmo socket
+                # 🔹 Loop de retentativas para o comando RA dentro do mesmo socket
                 payload_ra = ""
                 for attempt in range(3):
-                    if not self.running: break
+                    # Verifica timeout global dentro do loop de RA
+                    if not self.running or (time.time() - start_time) > timeout_limit: break
+                    
                     try:
                         ra_payload = "01+RA+00"
                         ra_packet = EvoRepProtocol.pack(ra_payload)
@@ -53,6 +55,7 @@ class NetworkWorker(QThread):
                         self.sent_bytes_signal.emit(ra_packet.hex(' '))
                         sock.sendall(ra_packet)
 
+                        # Usamos o timeout do socket (1s)
                         resp_data = EvoRepProtocol.receive_full(sock)
                         payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
                         self.received_signal.emit(payload_ra)
@@ -68,7 +71,10 @@ class NetworkWorker(QThread):
                     if attempt < 2: time.sleep(0.2)
 
                 if not payload_ra.startswith("01+RA+"):
-                    raise Exception("Falha ao obter RA válido após 3 tentativas.")
+                    if payload_ra.strip() == "":
+                        raise Exception("Equipamento já em conexão com outro comunicador.")
+                    else:
+                        raise Exception("Falha ao obter RA válido após 3 tentativas.")
 
                 self.log_signal.emit(f"Payload RA recebido: {payload_ra}")
 
@@ -126,7 +132,10 @@ class NetworkWorker(QThread):
         if not self.running:
             self.finished_signal.emit(False, "Operação cancelada pelo usuário.", None, b"", None)
         else:
-            self.finished_signal.emit(False, f"Incapaz de conectar: {last_error}", None, b"", None)
+            msg = f"Incapaz de conectar: {last_error}"
+            if "timed out" in last_error.lower():
+                msg = "Incapaz de conectar: IP não disponível para conexão. Verifique se o campo foi digitado corretamente e se o equipamento está devidamente conectado. O equipamento também pode estar sendo usado por outro comunicador. Se o erro persistir reinicie o REP."
+            self.finished_signal.emit(False, msg, None, b"", None)
 
 
 class ClientNetworkWorker(QThread):
@@ -274,6 +283,8 @@ class F3NetworkWorker(QThread):
     log_signal      = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str, object, bytes, object)
     auto_sent_signal = pyqtSignal(str, bytes)
+    received_signal = pyqtSignal(str)
+    received_bytes_signal = pyqtSignal(str)
 
     def __init__(self, ip: str, port: int, parent=None):
         super().__init__(parent)
@@ -300,12 +311,32 @@ class F3NetworkWorker(QThread):
             sock.sendall(rb_packet)
             self.auto_sent_signal.emit(rb_payload, rb_packet)
 
-            self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"", None)
+            # 🔹 REQUISITO: Aguardar resposta do RB por até 1s
+            try:
+                resp_data = EvoRepProtocol.receive_full(sock, timeout=1.0)
+                if not resp_data:
+                    raise Exception("Equipamento indisponível para conexão")
+                
+                payload_rb = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                self.received_signal.emit(payload_rb)
+                self.received_bytes_signal.emit(resp_data.hex(' '))
+                
+                self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"", None)
+            except Exception:
+                if sock:
+                    try: sock.close()
+                    except: pass
+                self.finished_signal.emit(False, "Equipamento indisponível para conexão", None, b"", None)
 
         except Exception as e:
             if self.running:
                 self.log_signal.emit(f"F3: Falha na conexão: {e}")
-                self.finished_signal.emit(False, str(e), None, b"", None)
+                err_str = str(e)
+                if "timed out" in err_str.lower():
+                    msg = "Incapaz de conectar: IP não disponível para conexão. Verifique se o campo foi digitado corretamente e se o equipamento está devidamente conectado. O equipamento também pode estar sendo usado por outro comunicador. Se o erro persistir reinicie o REP."
+                else:
+                    msg = f"Incapaz de conectar: {err_str}"
+                self.finished_signal.emit(False, msg, None, b"", None)
             if sock:
                 try: sock.close()
                 except: pass

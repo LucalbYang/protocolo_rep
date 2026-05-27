@@ -2329,6 +2329,9 @@ class EvoRepAuthApp(QWidget):
             self.f3_connect_button.setEnabled(False)
             state["worker"] = F3NetworkWorker(ip, port)
             state["worker"].auto_sent_signal.connect(lambda txt, bts: self.on_f3_auto_sent(txt, bts))
+            # 🔹 REQUISITO: Conectar sinais de recebimento para o handshake F3
+            state["worker"].received_signal.connect(lambda txt: self.append_received(txt, prefix))
+            state["worker"].received_bytes_signal.connect(lambda hex_txt: self.append_received_bytes(hex_txt, prefix))
 
         state["worker"].log_signal.connect(self.append_log)
         if hasattr(state["worker"], "sent_signal"):
