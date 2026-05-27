@@ -117,10 +117,12 @@ class MacroWindow(QWidget):
         self.delete_chunks = []
         self.is_deleting_bio = False
         self.bio_delete_phase = ""
-        self.bio_total = 0
+        self.bio_total_1 = 0
+        self.bio_total_2 = 0
         self.bio_current_index = 0
         self.bio_matriculas = []
         self.bio_type = "UNICA"
+        self.bio_dual_phase = "D"
 
     def closeEvent(self, event):
         self.settings.setValue(f"geometry_{self.prefix}", self.saveGeometry())
@@ -286,6 +288,9 @@ class MacroWindow(QWidget):
         self.is_deleting_bio = True
         self.bio_delete_phase = "quantity"
         self.bio_type = "UNICA" if self.radio_unica.isChecked() else "DUAL"
+        self.bio_total_1 = 0
+        self.bio_total_2 = 0
+        self.bio_dual_phase = "D"
         
         self.btn_bulk.setEnabled(False)
         self.btn_sequential.setEnabled(False)
@@ -303,7 +308,10 @@ class MacroWindow(QWidget):
         if self.bio_type == "UNICA":
             cmd = f"01+RD+00+L]100}}{self.bio_current_index}"
         else:
-            cmd = f"01+RD+00+L]D]100}}{self.bio_current_index}"
+            if self.bio_dual_phase == "D":
+                cmd = f"01+RD+00+L]D]100}}{self.bio_current_index}"
+            else:
+                cmd = f"01+RD+00+L]F]100}}{self.bio_current_index}"
             
         self.parent_app.send_external_command(cmd, self.prefix)
         
@@ -366,27 +374,40 @@ class MacroWindow(QWidget):
                         # Remove non-numeric prefixes/suffixes from the data part just to be clean
                         # Extract all numbers and sum them
                         nums = re.findall(r'\d+', data_part)
-                        self.bio_total = sum(int(n) for n in nums)
+                        if self.bio_type == "UNICA":
+                            self.bio_total_1 = sum(int(n) for n in nums)
+                            self.bio_total_2 = 0
+                        else:
+                            self.bio_total_1 = int(nums[0]) if len(nums) > 0 else 0
+                            self.bio_total_2 = int(nums[1]) if len(nums) > 1 else 0
                     except Exception as e:
                         self.log("Erro ao ler quantidade de biometrias.")
                         self.finish_bio_deletion()
                         return
                         
-                    if self.bio_total == 0:
+                    if self.bio_total_1 == 0 and (self.bio_type == "UNICA" or self.bio_total_2 == 0):
                         self.log("Nenhuma biometria cadastrada.")
                         self.finish_bio_deletion()
                         return
                     
-                    self.log(f"Quantidade de biometrias: {self.bio_total}. Coletando matrículas...")
+                    if self.bio_type == "DUAL":
+                        self.log(f"Quantidade de biometrias: D={self.bio_total_1}, F={self.bio_total_2}. Coletando matrículas...")
+                    else:
+                        self.log(f"Quantidade de biometrias: {self.bio_total_1}. Coletando matrículas...")
+                        
                     self.bio_current_index = 0
                     self.bio_matriculas = []
                     self.bio_delete_phase = "matriculas"
+                    self.bio_dual_phase = "F"
+                    if self.bio_type == "DUAL" and self.bio_total_1 == 0:
+                        self.bio_dual_phase = "D"
+                        
                     QTimer.singleShot(100, self.request_next_bio_matriculas)
                     return
             elif self.bio_delete_phase == "matriculas":
                 if "+RD+" in text and "+L]" in text:
                     data_part = text.split("+L]", 1)[1]
-                    if data_part.startswith("D}") or data_part.startswith("D]"):
+                    if data_part.startswith("D}") or data_part.startswith("D]") or data_part.startswith("F}") or data_part.startswith("F]"):
                         data_part = data_part[2:]
                         
                     mats = re.split(r'[\]\}]', data_part)
@@ -398,12 +419,34 @@ class MacroWindow(QWidget):
                     self.log(f"Coletadas {len(self.bio_matriculas)} matrículas...")
                     
                     self.bio_current_index += 100
-                    if self.bio_current_index < self.bio_total:
-                        QTimer.singleShot(100, self.request_next_bio_matriculas)
-                    else:
-                        self.log(f"Total de matrículas coletadas: {len(self.bio_matriculas)}. Iniciando exclusão...")
-                        self.bio_delete_phase = "delete"
-                        QTimer.singleShot(100, self.send_next_bio_delete)
+                    
+                    if self.bio_type == "UNICA":
+                        if self.bio_current_index < self.bio_total_1:
+                            QTimer.singleShot(100, self.request_next_bio_matriculas)
+                        else:
+                            self.log(f"Total de matrículas coletadas: {len(self.bio_matriculas)}. Iniciando exclusão...")
+                            self.bio_delete_phase = "delete"
+                            QTimer.singleShot(100, self.send_next_bio_delete)
+                    else: # DUAL
+                        if self.bio_dual_phase == "F":
+                            if self.bio_current_index < self.bio_total_1:
+                                QTimer.singleShot(100, self.request_next_bio_matriculas)
+                            else:
+                                self.bio_dual_phase = "D"
+                                self.bio_current_index = 0
+                                if self.bio_total_2 > 0:
+                                    QTimer.singleShot(100, self.request_next_bio_matriculas)
+                                else:
+                                    self.log(f"Total de matrículas coletadas: {len(self.bio_matriculas)}. Iniciando exclusão...")
+                                    self.bio_delete_phase = "delete"
+                                    QTimer.singleShot(100, self.send_next_bio_delete)
+                        else: # phase D
+                            if self.bio_current_index < self.bio_total_2:
+                                QTimer.singleShot(100, self.request_next_bio_matriculas)
+                            else:
+                                self.log(f"Total de matrículas coletadas: {len(self.bio_matriculas)}. Iniciando exclusão...")
+                                self.bio_delete_phase = "delete"
+                                QTimer.singleShot(100, self.send_next_bio_delete)
                     return
 
             elif self.bio_delete_phase == "delete":
