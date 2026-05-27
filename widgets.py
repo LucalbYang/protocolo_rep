@@ -15,6 +15,14 @@ class NoScrollComboBox(QComboBox):
         else:
             super().keyPressEvent(event)
 
+class DynamicIPComboBox(NoScrollComboBox):
+    """ComboBox que emite sinal antes de mostrar o popup, útil para atualizar dados sob demanda."""
+    aboutToShowPopup = pyqtSignal()
+
+    def showPopup(self):
+        self.aboutToShowPopup.emit()
+        super().showPopup()
+
 
 class NotificationCard(QWidget):
     """Card temporário que aparece no canto inferior direito."""

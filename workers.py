@@ -321,7 +321,13 @@ class F3NetworkWorker(QThread):
                 self.received_signal.emit(payload_rb)
                 self.received_bytes_signal.emit(resp_data.hex(' '))
                 
-                self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"", None)
+                if "00+00+015" in payload_rb:
+                    if sock:
+                        try: sock.close()
+                        except: pass
+                    self.finished_signal.emit(False, "Equipamento retornou Erro 015 (Iniciação de comunicação)", None, b"", None)
+                else:
+                    self.finished_signal.emit(True, "Conexão F3 estabelecida com sucesso.", sock, b"", None)
             except Exception:
                 if sock:
                     try: sock.close()
@@ -417,6 +423,15 @@ class DeauthWorker(QThread):
         finally:
             self.finished_signal.emit()
 
+
+class IPDiscoveryWorker(QThread):
+    """Worker para buscar IPs locais em segundo plano, evitando travar a UI."""
+    finished_signal = pyqtSignal(list)
+
+    def run(self):
+        from utils import list_all_local_ips
+        ips = list_all_local_ips()
+        self.finished_signal.emit(ips)
 
 class ListenerWorker(QThread):
     received_signal       = pyqtSignal(str)

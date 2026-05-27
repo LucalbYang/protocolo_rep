@@ -41,6 +41,59 @@ def generate_random_name():
     ]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 
+def list_all_local_ips():
+    """Retorna uma lista de todos os endereços IPv4 ativos nas interfaces de rede (ETH, WIFI, etc)."""
+    ips = set()
+    
+    # 1. Método ultra-rápido via socket.getaddrinfo (nativo Python)
+    try:
+        # Puxa todas as interfaces de rede conhecidas pelo OS
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                ips.add(ip)
+    except:
+        pass
+
+    # 2. Complemento via hostname_ex
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                ips.add(ip)
+    except:
+        pass
+
+    # 3. Fallback PowerShell (lento, só se os acima falharem em achar algo útil)
+    if not ips:
+        try:
+            ps_cmd = (
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | "
+                "Select-Object -ExpandProperty IPAddress"
+            )
+            output = subprocess.check_output(["powershell", "-Command", ps_cmd], 
+                                           shell=True, timeout=2).decode('utf-8', errors='ignore').strip()
+            if output:
+                for line in output.split('\n'):
+                    ip = line.strip()
+                    if ip: ips.add(ip)
+        except:
+            pass
+
+    # 4. Caso extremo: Conexão UDP fake para descobrir IP de saída
+    if not ips:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0)
+            s.connect(('10.254.254.254', 1))
+            ips.add(s.getsockname()[0])
+            s.close()
+        except:
+            ips.add("127.0.0.1")
+
+    return sorted(list(ips))
+
 def get_local_ip():
     """Obtém o IP local priorizando interfaces do tipo Ethernet (cabo) via PowerShell."""
     try:

@@ -20,12 +20,12 @@ from PyQt6.QtWidgets import (QApplication, QGridLayout, QLabel, QLineEdit,
 from comandos import COMMANDS_REGISTRY
 from constants import APP_VERSION, EC_VAL_CHOICES
 from ui_styles import build_qss
-from utils import resource_path, generate_cpf, generate_random_name, get_local_ip
+from utils import resource_path, generate_cpf, generate_random_name, get_local_ip, list_all_local_ips
 from evo_protocol import EvoRepProtocol
 from evo_crypto import EvoRepCrypto
 from workers import (NetworkWorker, ClientNetworkWorker, F3NetworkWorker, 
-                     CommandWorker, ListenerWorker, DeauthWorker)
-from widgets import NoScrollComboBox, NotificationCard, HeaderBar
+                     CommandWorker, ListenerWorker, DeauthWorker, IPDiscoveryWorker)
+from widgets import NoScrollComboBox, NotificationCard, HeaderBar, DynamicIPComboBox
 from macro import MacroWindow
 
 # ══════════════════════════════════════════════════════════════════════
@@ -141,6 +141,7 @@ class EvoRepAuthApp(QWidget):
 
         self._setup_ui()
         self.load_config()
+        self.update_client_ip_list() # Primeira carga ao abrir
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
         QApplication.processEvents()
@@ -259,8 +260,12 @@ class EvoRepAuthApp(QWidget):
         conn_layout.setColumnStretch(1, 1)
 
         conn_layout.addWidget(QLabel("IP:"), 0, 0)
-        ip_val  = get_local_ip() if is_client_mode else "192.168.60.71"
-        ip_input = QLineEdit(ip_val)
+        if is_client_mode:
+            ip_input = DynamicIPComboBox()
+            ip_input.aboutToShowPopup.connect(self.update_client_ip_list)
+        else:
+            ip_val  = "192.168.60.71"
+            ip_input = QLineEdit(ip_val)
         conn_layout.addWidget(ip_input, 0, 1)
 
         conn_layout.addWidget(QLabel("Porta:"), 1, 0)
@@ -482,8 +487,10 @@ class EvoRepAuthApp(QWidget):
         setattr(self, f"{prefix}cmd_description_label", cmd_description_label)
 
         # ── Sinais ────────────────────────────────────────────────
-        ip_input.returnPressed.connect(self.on_enter_pressed)
-        ip_input.editingFinished.connect(lambda: self._normalize_ip_field(ip_input))
+        if isinstance(ip_input, QLineEdit):
+            ip_input.returnPressed.connect(self.on_enter_pressed)
+            ip_input.editingFinished.connect(lambda: self._normalize_ip_field(ip_input))
+        
         port_input.returnPressed.connect(self.on_enter_pressed)
         command_combo.currentIndexChanged.connect(self.on_command_selected)
         send_button.clicked.connect(self.on_send_command_clicked)
@@ -657,6 +664,43 @@ class EvoRepAuthApp(QWidget):
                 state_f3 = self.tab_data["f3_"]
                 if not state_f3["connected"]:
                     self.f3_connect_button.setEnabled(True)
+                    
+    def update_client_ip_list(self):
+        """Dispara a busca de IPs em segundo plano para não travar a UI."""
+        if not hasattr(self, "client_ip_input") or not isinstance(self.client_ip_input, QComboBox):
+            return
+
+        # Evita disparar múltiplos workers simultâneos
+        if hasattr(self, "ip_discovery_worker") and self.ip_discovery_worker.isRunning():
+            return
+
+        self.ip_discovery_worker = IPDiscoveryWorker()
+        self.ip_discovery_worker.finished_signal.connect(self.apply_discovered_ips)
+        self.ip_discovery_worker.start()
+
+    def apply_discovered_ips(self, all_ips):
+        """Aplica os IPs encontrados ao ComboBox da aba F2."""
+        if not hasattr(self, "client_ip_input"): return
+        
+        current_ip = self.client_ip_input.currentText()
+        
+        # Só atualiza se a lista mudou para evitar flicker
+        existing_items = [self.client_ip_input.itemText(i) for i in range(self.client_ip_input.count())]
+        if all_ips == existing_items:
+            return
+
+        self.client_ip_input.blockSignals(True)
+        self.client_ip_input.clear()
+        self.client_ip_input.addItems(all_ips)
+        
+        # Tenta restaurar a seleção anterior
+        index = self.client_ip_input.findText(current_ip)
+        if index >= 0:
+            self.client_ip_input.setCurrentIndex(index)
+        elif self.client_ip_input.count() > 0:
+            self.client_ip_input.setCurrentIndex(0)
+            
+        self.client_ip_input.blockSignals(False)
     def on_choose_afd_path(self):
         from PyQt6.QtWidgets import QFileDialog
         last_dir = self.settings.value("afd_last_dir", os.path.expanduser("~"))
@@ -2000,7 +2044,7 @@ class EvoRepAuthApp(QWidget):
         self.main_user_input.setText(self.settings.value('user', 'teste fabrica'))
         self.main_password_input.setText(self.settings.value('password', '111111'))
 
-        self.client_ip_input.setText(get_local_ip())
+        self.client_ip_input.setCurrentText(self.settings.value('client_ip', get_local_ip()))
         self.client_port_input.setText(str(self.settings.value('client_port', 3000)))
         self.client_user_input.setText(self.settings.value('user', 'teste fabrica'))
         self.client_password_input.setText(self.settings.value('password', '111111'))
@@ -2018,10 +2062,12 @@ class EvoRepAuthApp(QWidget):
         self.validate_password_input()
         self.on_command_selected(0)
 
-    def save_config(self):
+    def save_config(self, prefix=None):
         self.settings.setValue("active_tab", self.stacked_widget.currentIndex())
 
-        prefix     = self._get_active_prefix()
+        if prefix is None:
+            prefix = self._get_active_prefix()
+
         # REQUISITO: Se estiver na aba F5, não tenta salvar campos locais (IP/Porta já linkados com F1)
         if prefix == "test_":
             self.settings.sync()
@@ -2210,7 +2256,7 @@ class EvoRepAuthApp(QWidget):
                     state["reconnect_count"] += 1
                     self.append_log(f"F3: Iniciando ciclo de reconexão automática {state['reconnect_count']}/3...")
                     self.disconnect(prefix)
-                    QTimer.singleShot(500, self.on_connect_clicked)
+                    QTimer.singleShot(500, lambda: self.on_connect_clicked(prefix))
                 else:
                     self.append_log("F3: Erro 015 persistente após 3 tentativas. Reconexão automática interrompida.")
                     state["reconnect_count"] = 0
@@ -2274,8 +2320,11 @@ class EvoRepAuthApp(QWidget):
     #  CONEXÃO / DESCONEXÃO  (inalteradas)
     # ──────────────────────────────────────────────────────────────────
 
-    def on_connect_clicked(self):
-        prefix = self._get_active_prefix()
+    def on_connect_clicked(self, prefix=None):
+        # Se prefix for o booleano do sinal clicked ou None, pega o ativo
+        if prefix is None or isinstance(prefix, bool):
+            prefix = self._get_active_prefix()
+
         if prefix == "test_":
             prefix = "main_"
         state  = self.tab_data[prefix]
@@ -2293,7 +2342,8 @@ class EvoRepAuthApp(QWidget):
             self.disconnect(prefix)
             return
 
-        ip        = getattr(self, f"{prefix}ip_input").text().strip()
+        ip_widget = getattr(self, f"{prefix}ip_input")
+        ip = ip_widget.currentText().strip() if isinstance(ip_widget, QComboBox) else ip_widget.text().strip()
         port_text = getattr(self, f"{prefix}port_input").text().strip()
 
         if prefix != "f3_":
@@ -2312,7 +2362,7 @@ class EvoRepAuthApp(QWidget):
             self.append_log("Porta inválida.")
             return
 
-        self.save_config()
+        self.save_config(prefix)
 
         if prefix == "main_":
             self.main_connect_button.setEnabled(False)
@@ -2339,7 +2389,7 @@ class EvoRepAuthApp(QWidget):
             state["worker"].sent_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_sent_bytes(hex_txt, p))
             state["worker"].received_signal.connect(lambda txt, p=prefix: self.append_received(txt, p))
             state["worker"].received_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_received_bytes(hex_txt, p))
-        state["worker"].finished_signal.connect(lambda s, m, sk, key, rsa: self.on_finished(s, m, sk, key, rsa, prefix))
+        state["worker"].finished_signal.connect(lambda s, m, sk, key, rsa, p=prefix: self.on_finished(s, m, sk, key, rsa, p))
         state["worker"].start()
 
     def disconnect_equipment_only(self, prefix):
@@ -2367,7 +2417,8 @@ class EvoRepAuthApp(QWidget):
             self.client_macro_button.setVisible(False)
             # Re-habilita o worker de escuta do servidor se ele foi fechado após o accept
             if not state["worker"] or not state["worker"].isRunning():
-                ip        = getattr(self, f"{prefix}ip_input").text().strip()
+                ip_widget = getattr(self, f"{prefix}ip_input")
+                ip = ip_widget.currentText().strip() if isinstance(ip_widget, QComboBox) else ip_widget.text().strip()
                 port_text = getattr(self, f"{prefix}port_input").text().strip()
                 user      = getattr(self, f"{prefix}user_input").text().strip()
                 password  = getattr(self, f"{prefix}password_input").text().strip()
@@ -2380,7 +2431,7 @@ class EvoRepAuthApp(QWidget):
                         state["worker"].sent_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_sent_bytes(hex_txt, p))
                         state["worker"].received_signal.connect(lambda txt, p=prefix: self.append_received(txt, p))
                         state["worker"].received_bytes_signal.connect(lambda hex_txt, p=prefix: self.append_received_bytes(hex_txt, p))
-                    state["worker"].finished_signal.connect(lambda s, m, sk, key: self.on_finished(s, m, sk, key, prefix))
+                    state["worker"].finished_signal.connect(lambda s, m, sk, key, rsa, p=prefix: self.on_finished(s, m, sk, key, rsa, p))
                     state["worker"].start()
                     self.append_log("Servidor reiniciado para aguardar nova conexão.")
                 except:
@@ -2617,7 +2668,8 @@ class EvoRepAuthApp(QWidget):
             if "10013" in message or "10048" in message:
                 message = "Soquete em uso por outra aplicação"
             
-            if not self.test_mode:
+            # 🔹 REQUISITO: Não mostrar mensagem de erro se for o Erro 015 (reconexão automática silenciosa)
+            if not self.test_mode and "Erro 015" not in message:
                 QMessageBox.critical(self, "Erro de Conexão", message)
 
         self.update_dependent_tabs_state()
