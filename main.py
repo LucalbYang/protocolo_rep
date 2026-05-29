@@ -123,6 +123,11 @@ class EvoRepAuthApp(QWidget):
         self.afd_emp_id = ""
         self.afd_emp_type = "1"
         self.afd_emp_name = ""
+
+        # Report State
+        self.report_save_path   = ""
+        self.is_report_running  = False
+        self.report_worker      = None
         self.afd_first_date = ""
         self.afd_last_date = ""
         self.afd_count_2 = 0
@@ -615,13 +620,45 @@ class EvoRepAuthApp(QWidget):
         afd_box_layout.addWidget(self.afd_progress_bar)
         afd_group.setLayout(afd_box_layout)
 
+        # 4. Box de Gerar Relatório de Testes
+        report_group = QGroupBox("Gerar Relatório de Testes")
+        report_box_layout = QVBoxLayout()
+        report_box_layout.setContentsMargins(10, 20, 10, 10)
+        report_box_layout.setSpacing(5)
+
+        self.btn_choose_report_path = QPushButton("Escolher pasta")
+        self.btn_choose_report_path.setMinimumHeight(25)
+        self.btn_choose_report_path.clicked.connect(self.on_choose_report_path)
+
+        self.btn_gerar_relatorio = QPushButton("Gerar Relatório - Escolha pasta para liberar")
+        self.btn_gerar_relatorio.setObjectName("primary_btn")
+        self.btn_gerar_relatorio.setEnabled(False)
+        self.btn_gerar_relatorio.setMinimumHeight(25)
+        self.btn_gerar_relatorio.clicked.connect(lambda: self.on_test_button_clicked("gerar_relatorio"))
+
+        self.report_progress_bar = QProgressBar()
+        self.report_progress_bar.setVisible(False)
+        self.report_progress_bar.setMinimumHeight(15)
+
+        report_box_layout.addWidget(self.btn_choose_report_path)
+        report_box_layout.addWidget(self.btn_gerar_relatorio)
+        report_box_layout.addWidget(self.report_progress_bar)
+        report_group.setLayout(report_box_layout)
+
         # Organiza as boxes no layout horizontal com peso 1 (distribuição igualitária)
         top_boxes_layout.addWidget(conn_group, 1)
         top_boxes_layout.addWidget(cad_group, 1)
         top_boxes_layout.addWidget(afd_group, 1)
 
+        # 🔹 REQUISITO: Relatório na linha de baixo ocupando 1/3
+        bottom_boxes_layout = QHBoxLayout()
+        bottom_boxes_layout.setSpacing(10)
+        bottom_boxes_layout.addWidget(report_group, 1)
+        bottom_boxes_layout.addStretch(2) # Faz o report_group ocupar 1/3 e o resto ser espaço vazio
+
         # Layout Principal da aba
         layout.addLayout(top_boxes_layout)
+        layout.addLayout(bottom_boxes_layout)
         
         # 🔹 REQUISITO: Label de aviso em vermelho no canto inferior esquerdo
         bottom_layout = QHBoxLayout()
@@ -639,18 +676,21 @@ class EvoRepAuthApp(QWidget):
         """Atualiza o estado das abas F3 e F5 baseado na conexão da F1."""
         is_f1_connected = self.tab_data["main_"]["connected"]
         is_test_active = getattr(self, "is_test_running", False)
+        is_report_active = getattr(self, "is_report_running", False)
 
         # ── LÓGICA PARA ABA F5 (TESTES) ──────────────────────────
         if hasattr(self, "test_connection_warning"):
             # Só mostra o aviso se a F1 estiver conectada MANUALMENTE (não via teste)
             if is_f1_connected and not is_test_active:
                 self.test_connection_warning.setText("⚠️ Desconecte na aba F1 para liberar os testes.")
+            elif is_report_active:
+                self.test_connection_warning.setText("⚠️ Relatório em execução...")
             else:
                 self.test_connection_warning.setText("")
 
             # 🔹 REQUISITO: Botões liberados se F1 desconectada OU se for conexão de teste ativo
-            # Isso permite adicionar itens à fila mesmo com teste rodando.
-            base_interact = not is_f1_connected or is_test_active
+            # Bloqueia tudo se o relatório estiver rodando.
+            base_interact = (not is_f1_connected or is_test_active) and not is_report_active
 
             # Helper para saber se o botão específico já está na fila
             def is_in_queue(btn):
@@ -660,6 +700,13 @@ class EvoRepAuthApp(QWidget):
             self.btn_empregador.setEnabled(base_interact and not is_in_queue(self.btn_empregador))
             self.btn_colab_teste.setEnabled(base_interact and not is_in_queue(self.btn_colab_teste))
             self.btn_choose_afd_path.setEnabled(base_interact) # Escolher pasta sempre livre se base_interact
+
+            if hasattr(self, "btn_choose_report_path"):
+                self.btn_choose_report_path.setEnabled(base_interact)
+                if not base_interact or is_in_queue(self.btn_gerar_relatorio):
+                    self.btn_gerar_relatorio.setEnabled(False)
+                else:
+                    self.btn_gerar_relatorio.setEnabled(bool(self.report_save_path))
 
             # Gerar AFD também entra na fila
             if not base_interact or is_in_queue(self.btn_gerar_afd):
@@ -726,6 +773,18 @@ class EvoRepAuthApp(QWidget):
             self.btn_gerar_afd.setText("Gerar AFD") # 🔹 Restaura o texto original ao liberar
             self.append_log(f"ABA TESTES (F5): Pasta para AFD definida: {folder}")
 
+    def on_choose_report_path(self):
+        from PyQt6.QtWidgets import QFileDialog
+        last_dir = self.settings.value("report_last_dir", os.path.expanduser("~"))
+        folder = QFileDialog.getExistingDirectory(self, "Escolher Pasta para salvar Relatório", last_dir)
+        
+        if folder:
+            self.report_save_path = folder
+            self.settings.setValue("report_last_dir", folder)
+            self.btn_gerar_relatorio.setEnabled(True)
+            self.btn_gerar_relatorio.setText("Gerar Relatório")
+            self.append_log(f"ABA TESTES (F5): Pasta para Relatório definida: {folder}")
+
     def update_loading_animations(self):
         self.symbol_idx = (self.symbol_idx + 1) % len(self.loading_symbols)
         symbol = self.loading_symbols[self.symbol_idx]
@@ -766,16 +825,21 @@ class EvoRepAuthApp(QWidget):
 
         self.is_test_running = True
         test_type, btn = self.test_queue[0]
-        
-        # Inicia o timer de timeout de 5 segundos para a execução atual (Exceto para AFD que é longo)
-        if test_type != "gerar_afd":
+
+        # Inicia o timer de timeout de 5 segundos para a execução atual (Exceto para AFD e relatório que são longos)
+        if test_type not in ["gerar_afd", "gerar_relatorio"]:
             self.test_timeout_timer.start(5000)
+
+        if test_type == "gerar_relatorio":
+            self.test_mode = test_type
+            self.start_report_flow()
+            return
 
         if self.tab_data["main_"]["connected"]:
             # Se já estiver conectado, pula o handshake e envia direto se for o mesmo usuário
             current_user = self.main_user_input.text()
             target_user = "rep" if test_type == "usuario_padrao" else "teste fabrica"
-            
+
             if current_user != target_user:
                 self.append_log(f"ABA TESTES (F5): Trocando usuário para {target_user}...")
                 self.disconnect("main_")
@@ -1136,6 +1200,58 @@ class EvoRepAuthApp(QWidget):
         else:
             # Fallback para resposta desconhecida para não travar a UI
             self._finish_current_test(f"Resposta Inesperada: {text[:20]}...", "#C0392B")
+
+    def start_report_flow(self):
+        from workers import ReportWorker
+        self.is_report_running = True
+        self.update_dependent_tabs_state()
+
+        self.report_progress_bar.setVisible(True)
+        self.report_progress_bar.setValue(0)
+        self.report_progress_bar.setFormat("Iniciando Relatório... %p%")
+
+        ip = self.test_ip_input.text().strip()
+        port = int(self.test_port_input.text().strip())
+        # Usa usuário fixo conforme requisito ou pega do input de teste
+        user = "teste fabrica"
+        password = "111111"
+
+        self.append_log(f"ABA TESTES (F5): Iniciando Geração de Relatório em {ip}:{port}...")
+
+        self.report_worker = ReportWorker(ip, port, user, password, self.report_save_path)
+        self.report_worker.log_signal.connect(lambda msg: self.append_log(f"RELATÓRIO: {msg}"))
+        self.report_worker.progress_signal.connect(self._on_report_progress)
+        self.report_worker.entry_signal.connect(self._on_report_entry)
+        self.report_worker.finished_signal.connect(self._on_report_finished)
+        self.report_worker.start()
+
+    def _on_report_progress(self, current, total):
+        self.report_progress_bar.setMaximum(total)
+        self.report_progress_bar.setValue(current)
+        self.report_progress_bar.setFormat(f"Executando: {current}/{total} (%p%)")
+
+    def _on_report_entry(self, label, sent, received):
+        self.append_log(f"RELATÓRIO {label} -> {sent}")
+
+    def _on_report_finished(self, success, result_or_error):
+        self.is_report_running = False
+        self.update_dependent_tabs_state()
+
+        QTimer.singleShot(2000, lambda: self.report_progress_bar.setVisible(False))
+
+        if success:
+            self.append_log(f"ABA TESTES (F5): Relatório gerado com sucesso em {result_or_error}")
+            NotificationCard(self, "Relatório Gerado com Sucesso", "#27AE60")
+            try:
+                import os
+                os.startfile(result_or_error)
+            except:
+                pass
+            self._finish_current_test("Relatório Gerado com Sucesso", "#27AE60")
+        else:
+            self.append_log(f"ABA TESTES (F5): Falha ao gerar relatório: {result_or_error}")
+            NotificationCard(self, "Falha ao Gerar Relatório", "#C0392B")
+            self._finish_current_test("Erro ao Gerar Relatório", "#C0392B")
 
     def _send_raw_command(self, prefix, command_str):
         state = self.tab_data[prefix]

@@ -469,3 +469,228 @@ class ListenerWorker(QThread):
                 if self.running:
                     self.error_signal.emit(str(e))
                 break
+
+
+class ReportWorker(QThread):
+    log_signal      = pyqtSignal(str)
+    progress_signal = pyqtSignal(int, int)
+    entry_signal    = pyqtSignal(str, str, str)
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, ip: str, port: int, user: str, password: str, save_path: str, parent=None):
+        super().__init__(parent)
+        self.ip = ip
+        self.port = port
+        self.user = user
+        self.password = password
+        self.save_path = save_path
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def run(self):
+        sock = None
+        session_key = None
+        try:
+            self.log_signal.emit(f"Tentando conectar a {self.ip}:{self.port} para Relatório...")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(2.0)
+            sock.connect((self.ip, self.port))
+
+            payload_ra = ""
+            for attempt in range(3):
+                if not self.running: break
+                try:
+                    ra_payload = "01+RA+00"
+                    ra_packet = EvoRepProtocol.pack(ra_payload)
+                    sock.sendall(ra_packet)
+                    resp_data = EvoRepProtocol.receive_full(sock, timeout=2.0)
+                    payload_ra = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                    if payload_ra.startswith("01+RA+"):
+                        break
+                except Exception:
+                    pass
+                if attempt < 2: time.sleep(0.2)
+
+            if not payload_ra.startswith("01+RA+"):
+                raise Exception("Falha ao obter RA válido.")
+
+            if payload_ra.startswith("01+RA+047"):
+                raise Exception("Equipamento bloqueado (Erro 047).")
+
+            rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
+            n, e, _ = rsa_pubkey_data
+
+            session_key = EvoRepCrypto.generate_aes_key()
+            session_key_b64 = base64.b64encode(session_key).decode("utf-8")
+            credential = f"1]{self.user}]{self.password}]{session_key_b64}"
+
+            encrypted = EvoRepCrypto.encrypt_credentials_with_rsa((n, e), credential)
+            encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
+
+            ea_payload = f"01+EA+00+{encrypted_b64}"
+            ea_packet = EvoRepProtocol.pack(ea_payload)
+            sock.sendall(ea_packet)
+
+            resp_ea = EvoRepProtocol.receive_full(sock, timeout=2.0)
+            payload_ea = EvoRepProtocol.unpack(resp_ea).decode('utf-8', errors='ignore')
+
+            if not payload_ea.startswith("01+EA+000"):
+                raise Exception(f"Falha na autenticação (EA): {payload_ea}")
+
+            self.log_signal.emit("Autenticação realizada. Iniciando envio de comandos...")
+
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+            if sock:
+                try: sock.close()
+                except: pass
+            return
+
+        cmd_list = self._build_command_list()
+        entries = []
+        total = len(cmd_list)
+
+        for i, (label, cmd_str) in enumerate(cmd_list):
+            if not self.running:
+                break
+            
+            self.progress_signal.emit(i, total)
+            idx_str = f"[{i+1:03d}/{total:03d}] {label}"
+            resp_str = ""
+            start_t = time.time()
+            
+            try:
+                encrypted_cmd = EvoRepCrypto.encrypt_aes(session_key, cmd_str)
+                packet = EvoRepProtocol.pack(encrypted_cmd)
+                sock.sendall(packet)
+
+                resp_data = EvoRepProtocol.receive_full(sock, timeout=8.0)
+                if not resp_data:
+                    resp_str = "[TIMEOUT — sem resposta]"
+                else:
+                    raw_payload = EvoRepProtocol.unpack(resp_data)
+                    resp_str = EvoRepCrypto.decrypt_aes(session_key, raw_payload)
+                    
+                    if label in ("ED/Cadastrar Digital", "ED/Cadastrar Facial") and resp_str.endswith("+000"):
+                        try:
+                            resp_data2 = EvoRepProtocol.receive_full(sock, timeout=90.0)
+                            if resp_data2:
+                                raw_payload2 = EvoRepProtocol.unpack(resp_data2)
+                                resp_str2 = EvoRepCrypto.decrypt_aes(session_key, raw_payload2)
+                                resp_str += f" | {resp_str2}"
+                            else:
+                                resp_str += " | [TIMEOUT — sem segunda resposta]"
+                        except Exception as ex2:
+                            resp_str += f" | [ERRO NA 2ª RESPOSTA: {ex2}]"
+            except Exception as ex:
+                resp_str = f"[ERRO: {ex}]"
+
+            duration = time.time() - start_t
+            entries.append((label, cmd_str, resp_str, duration))
+            self.entry_signal.emit(idx_str, cmd_str, resp_str)
+
+            time.sleep(0.15)
+
+        self.progress_signal.emit(total, total)
+
+        if not self.running:
+            self.finished_signal.emit(False, "Cancelado pelo usuário.")
+            if sock:
+                try: sock.close()
+                except: pass
+            return
+
+        try:
+            saved_path = self._save_report(entries, self.ip, self.port, self.save_path)
+            self.finished_signal.emit(True, saved_path)
+        except Exception as e:
+            self.finished_signal.emit(False, f"Erro ao salvar: {e}")
+
+        if sock:
+            try: sock.close()
+            except: pass
+
+    def _build_command_list(self) -> list[tuple[str, str]]:
+        import report_config
+        from datetime import datetime
+
+        now = datetime.now()
+        eh_data = now.strftime("%d/%m/%y")
+        eh_hora = now.strftime("%H:%M:%S")
+
+        cmds = [
+            ("RH", "01+RH+00"),
+            ("EH", f"01+EH+00+{eh_data} {eh_hora}]00/00/00]00/00/00"),
+            ("RE", "01+RE+00"),
+            ("EE", f"01+EE+00+1]{report_config.EE_ID}]{report_config.EE_NOME}]{report_config.EE_LOCAL}"),
+            ("ES", f"01+ES+00+{report_config.ES_CPF}]{report_config.ES_LOGIN}]{report_config.ES_SENHA}]{report_config.ES_CARTAO}"),
+            ("EU - Enviar Colaborador", f"01+EU+00+1+I[{report_config.EU_CPF}[{report_config.EU_NOME}[{report_config.EU_BIO}[{report_config.EU_QMAT}[{report_config.EU_MAT1}}}{report_config.EU_MAT2}")
+        ]
+
+        # RQ — Status
+        for v in ["U", "D", "TD", "R", "TP", "MRPE", "SEMP", "PP", "SP", "QP", "PRN"]:
+            cmds.append((f"RQ/{v}", f"01+RQ+00+{v}"))
+
+        # RC — Configuração
+        for p in report_config.RC_PARAMS:
+            cmds.append((f"RC/{p}", f"01+RC+00+{p}"))
+
+        # RU — Colaboradores
+        cmds.append(("RU/Quantidade", f"01+RU+00+{report_config.RU_QUANTIDADE}]{report_config.RU_INDICE}"))
+        cmds.append(("RU/Matricula", f"01+RU+00+-1]{report_config.RU_MATRICULA}"))
+        cmds.append(("RU/CPF", f"01+RU+00+-2]{report_config.RU_CPF}"))
+
+        # RR — Registros
+        cmds.append(("RR/Memoria", f"01+RR+00+M]{report_config.RR_QUANTIDADE}]{report_config.RR_ENDERECO}"))
+        cmds.append(("RR/NSR", f"01+RR+00+N]{report_config.RR_QUANTIDADE}]{report_config.RR_NSR}"))
+        cmds.append(("RR/Data", f"01+RR+00+D]{report_config.RR_QUANTIDADE}]{report_config.RR_DATA} {report_config.RR_HORA}"))
+
+        # ED — Cadastrar Biometria
+        cmds.append(("ED/Cadastrar Digital", f"01+ED+00+R]D}}{report_config.ED_MATRICULA}"))
+        cmds.append(("ED/Cadastrar Facial", f"01+ED+00+R]F}}{report_config.ED_MATRICULA}"))
+        
+        # RD — Biometria
+        cmds.append(("RD/Lista Única", f"01+RD+00+L]{report_config.RD_QUANTIDADE}}}{report_config.RD_INDICE}"))
+        cmds.append(("RD/Lista DUAL - Digital", f"01+RD+00+L]D]{report_config.RD_QUANTIDADE}}}{report_config.RD_INDICE}"))
+        cmds.append(("RD/Lista DUAL - Facial", f"01+RD+00+L]F]{report_config.RD_QUANTIDADE}}}{report_config.RD_INDICE}"))
+        cmds.append(("RD/Quantidade", f"01+RD+00+Q]{report_config.RD_MATRICULA}"))
+
+        # ED — Deletar Biometria
+        cmds.append(("ED/Deletar", f"01+ED+00+E]{report_config.ED_MATRICULA}"))
+
+        # EU — Excluir Colaborador
+        cmds.append(("EU/Excluir", f"01+EU+00+1+E[{report_config.EU_CPF}"))
+
+        return cmds
+
+    def _save_report(self, entries, ip, port, save_path) -> str:
+        import os
+        from datetime import datetime
+
+        now = datetime.now()
+        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+        date_str = now.strftime("%d/%m/%Y %H:%M:%S")
+        filename = f"relatorio_testes_{ip.replace('.', '_')}_{timestamp_str}.txt"
+        full_path = os.path.join(save_path, filename)
+
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write("========================================\n")
+            f.write(" REPLink — Relatório de Testes\n")
+            f.write(f" Data   : {date_str}\n")
+            f.write(f" IP     : {ip}\n")
+            f.write(f" Porta  : {port}\n")
+            f.write(f" Total  : {len(entries)} comandos enviados\n")
+            f.write("========================================\n\n")
+
+            total = len(entries)
+            for i, (label, cmd_str, resp_str, duration) in enumerate(entries):
+                f.write(f"[{i+1:03d}/{total:03d}] {label}\n")
+                f.write(f"  → Enviado : {cmd_str}\n")
+                f.write(f"  ← Resposta: {resp_str}\n")
+                f.write(f"  ⏱  Duração: {duration:.3f}s\n")
+                f.write("-" * 40 + "\n")
+
+        return full_path
