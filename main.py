@@ -832,6 +832,10 @@ class EvoRepAuthApp(QWidget):
 
         if test_type == "gerar_relatorio":
             self.test_mode = test_type
+            self.old_credentials = {
+                "user": self.main_user_input.text(),
+                "pass": self.main_password_input.text()
+            }
             self.start_report_flow()
             return
 

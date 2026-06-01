@@ -492,6 +492,7 @@ class ReportWorker(QThread):
     def run(self):
         sock = None
         session_key = None
+        rsa_key = None
         try:
             self.log_signal.emit(f"Tentando conectar a {self.ip}:{self.port} para Relatório...")
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -522,6 +523,7 @@ class ReportWorker(QThread):
 
             rsa_pubkey_data = EvoRepCrypto.extract_rsa_key_from_payload(payload_ra)
             n, e, _ = rsa_pubkey_data
+            rsa_key = (n, e)
 
             session_key = EvoRepCrypto.generate_aes_key()
             session_key_b64 = base64.b64encode(session_key).decode("utf-8")
@@ -609,6 +611,19 @@ class ReportWorker(QThread):
         except Exception as e:
             self.finished_signal.emit(False, f"Erro ao salvar: {e}")
 
+        if sock and rsa_key:
+            try:
+                session_key_b64 = base64.b64encode(session_key).decode("utf-8")
+                credential = f"0]{self.user}]{self.password}]{session_key_b64}"
+                encrypted = EvoRepCrypto.encrypt_credentials_with_rsa(rsa_key, credential)
+                encrypted_b64 = base64.b64encode(encrypted).decode("utf-8")
+                ea_payload = f"01+EA+00+{encrypted_b64}"
+                ea_packet = EvoRepProtocol.pack(ea_payload)
+                sock.settimeout(0.5)
+                sock.sendall(ea_packet)
+            except:
+                pass
+
         if sock:
             try: sock.close()
             except: pass
@@ -626,7 +641,6 @@ class ReportWorker(QThread):
             ("EH", f"01+EH+00+{eh_data} {eh_hora}]00/00/00]00/00/00"),
             ("RE", "01+RE+00"),
             ("EE", f"01+EE+00+1]{report_config.EE_ID}]{report_config.EE_NOME}]{report_config.EE_LOCAL}"),
-            ("ES", f"01+ES+00+{report_config.ES_CPF}]{report_config.ES_LOGIN}]{report_config.ES_SENHA}]{report_config.ES_CARTAO}"),
             ("EU - Enviar Colaborador", f"01+EU+00+1+I[{report_config.EU_CPF}[{report_config.EU_NOME}[{report_config.EU_BIO}[{report_config.EU_QMAT}[{report_config.EU_MAT1}}}{report_config.EU_MAT2}")
         ]
 
