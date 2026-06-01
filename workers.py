@@ -640,7 +640,7 @@ class ReportWorker(QThread):
             ("RH", "01+RH+00"),
             ("EH", f"01+EH+00+{eh_data} {eh_hora}]00/00/00]00/00/00"),
             ("RE", "01+RE+00"),
-            ("EE", f"01+EE+00+1]{report_config.EE_ID}]{report_config.EE_NOME}]{report_config.EE_LOCAL}"),
+            ("EE", f"01+EE+00+1]{report_config.EE_ID}]]{report_config.EE_NOME}]{report_config.EE_LOCAL}"),
             ("EU - Enviar Colaborador", f"01+EU+00+1+I[{report_config.EU_CPF}[{report_config.EU_NOME}[{report_config.EU_BIO}[{report_config.EU_QMAT}[{report_config.EU_MAT1}}}{report_config.EU_MAT2}")
         ]
 
@@ -683,28 +683,85 @@ class ReportWorker(QThread):
     def _save_report(self, entries, ip, port, save_path) -> str:
         import os
         from datetime import datetime
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment
 
         now = datetime.now()
         timestamp_str = now.strftime("%Y%m%d_%H%M%S")
-        date_str = now.strftime("%d/%m/%Y %H:%M:%S")
-        filename = f"relatorio_testes_{ip.replace('.', '_')}_{timestamp_str}.txt"
+        
+        num_rep = ""
+        for label, cmd_str, resp_str, _ in entries:
+            if label == "RC/NR_REP":
+                parts = resp_str.split("+")
+                if len(parts) >= 4 and parts[2] == "00":
+                    num_rep = parts[3].split("]")[0].strip()
+                break
+
+        if not num_rep:
+            num_rep = f"_{ip.replace('.', '_')}_{timestamp_str}"
+
+        filename = f"Relatório{num_rep}.xlsx"
         full_path = os.path.join(save_path, filename)
 
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write("========================================\n")
-            f.write(" REPLink — Relatório de Testes\n")
-            f.write(f" Data   : {date_str}\n")
-            f.write(f" IP     : {ip}\n")
-            f.write(f" Porta  : {port}\n")
-            f.write(f" Total  : {len(entries)} comandos enviados\n")
-            f.write("========================================\n\n")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Relatório de Testes"
 
-            total = len(entries)
-            for i, (label, cmd_str, resp_str, duration) in enumerate(entries):
-                f.write(f"[{i+1:03d}/{total:03d}] {label}\n")
-                f.write(f"  → Enviado : {cmd_str}\n")
-                f.write(f"  ← Resposta: {resp_str}\n")
-                f.write(f"  ⏱  Duração: {duration:.3f}s\n")
-                f.write("-" * 40 + "\n")
+        # Headers
+        headers = ["N°", "Comando enviado", "String enviada", "String recebida", "Duração", "Status"]
+        ws.append(headers)
 
+        header_font = Font(bold=True)
+        for col_num in range(1, len(headers) + 1):
+            ws.cell(row=1, column=col_num).font = header_font
+
+        # Colors & Styles
+        green_fill = PatternFill(start_color="92D050", end_color="92D050", fill_type="solid")
+        red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        wrap_alignment = Alignment(wrap_text=True, vertical='center')
+
+        for i, (label, cmd_str, resp_str, duration) in enumerate(entries, 1):
+            idx_bracket = resp_str.find("]")
+            if idx_bracket != -1:
+                is_ok = "+000" in resp_str[:idx_bracket]
+            else:
+                is_ok = "+000" in resp_str
+
+            status = "OK" if is_ok else "NOK"
+            
+            row_num = i + 1
+            ws.append([i, label, cmd_str, resp_str, f"{duration:.3f}s", status])
+            
+            # Formatação de texto e quebra de linha
+            for col_num in range(1, 7):
+                ws.cell(row=row_num, column=col_num).alignment = wrap_alignment
+
+            # Formatação de cor no status
+            status_cell = ws.cell(row=row_num, column=6)
+            if is_ok:
+                status_cell.fill = green_fill
+            else:
+                status_cell.fill = red_fill
+
+        # Auto adjust column widths roughly for columns A, B, E, F
+        for col in ws.columns:
+            column = col[0].column_letter
+            if column in ['C', 'D']:
+                continue  # Skip C and D for auto-adjust
+
+            max_length = 0
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column].width = min(adjusted_width, 100)
+
+        # Fixed widths for specific columns to force wrapping
+        ws.column_dimensions['C'].width = 50  # string enviada
+        ws.column_dimensions['D'].width = 65  # string recebida
+
+        wb.save(full_path)
         return full_path
