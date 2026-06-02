@@ -247,7 +247,7 @@ class MacroWindow(QWidget):
             self.start_deletion_phase()
             return
 
-        batch_size = min(10, remaining)
+        batch_size = min(20, remaining)
         command_str = f"01+RU+00+{batch_size}]{self.current_ru_index}"
         self.parent_app.send_external_command(command_str, self.prefix)
         self.log(f"Coletando CPFs... (Índice: {self.current_ru_index}, Meta: {self.target_delete_count})")
@@ -259,7 +259,7 @@ class MacroWindow(QWidget):
             return
 
         self.log(f"Coletados {len(self.delete_queue_cpfs)} CPFs. Iniciando exclusão...")
-        self.delete_chunks = [self.delete_queue_cpfs[i:i + 10] for i in range(0, len(self.delete_queue_cpfs), 10)]
+        self.delete_chunks = [self.delete_queue_cpfs[i:i + 20] for i in range(0, len(self.delete_queue_cpfs), 20)]
         self.send_next_delete_chunk()
 
     def send_next_delete_chunk(self):
