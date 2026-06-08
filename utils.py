@@ -37,7 +37,7 @@ def generate_random_name():
         "Silva", "Martinez", "Carvalho", "Fonseca", "Oliveira", "Souza", "Pereira", "Costa", "Rodrigues", "Almeida",
         "Santos", "Ferreira", "Gomes", "Rocha", "Ribeiro", "Alves", "Monteiro", "Mendes", "Barros", "Lima",
         "Teixeira", "Cavalcanti", "Moraes", "Nunes", "Dias", "Cardoso", "Castro", "Cunha", "Melo", "Pinto",
-        "Farias", "Machado", "Ara Araújo", "Freitas", "Borges", "Batista", "Moreira", "Marques", "Neves", "Correia"
+        "Farias", "Machado", "Araújo", "Freitas", "Borges", "Batista", "Moreira", "Marques", "Neves", "Correia"
     ]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 

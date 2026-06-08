@@ -645,16 +645,43 @@ class EvoRepAuthApp(QWidget):
         report_box_layout.addWidget(self.report_progress_bar)
         report_group.setLayout(report_box_layout)
 
+        # 5. Box Procurar REPs
+        search_group = QGroupBox("Procurar REPs")
+        search_box_layout = QVBoxLayout()
+        search_box_layout.setContentsMargins(10, 20, 10, 10)
+        search_box_layout.setSpacing(5)
+
+        from PyQt6.QtWidgets import QListWidget
+        self.rep_list_widget = QListWidget()
+        self.rep_list_widget.setMinimumHeight(60)
+
+        search_btns_layout = QHBoxLayout()
+        self.btn_search_reps = QPushButton("Buscar")
+        self.btn_search_reps.setObjectName("primary_btn")
+        self.btn_search_reps.clicked.connect(self.on_search_reps_clicked)
+
+        self.btn_connect_rep = QPushButton("Conectar")
+        self.btn_connect_rep.setObjectName("primary_btn")
+        self.btn_connect_rep.clicked.connect(self.on_connect_searched_rep)
+
+        search_btns_layout.addWidget(self.btn_search_reps)
+        search_btns_layout.addWidget(self.btn_connect_rep)
+
+        search_box_layout.addWidget(self.rep_list_widget)
+        search_box_layout.addLayout(search_btns_layout)
+        search_group.setLayout(search_box_layout)
+
         # Organiza as boxes no layout horizontal com peso 1 (distribuição igualitária)
         top_boxes_layout.addWidget(conn_group, 1)
         top_boxes_layout.addWidget(cad_group, 1)
         top_boxes_layout.addWidget(afd_group, 1)
 
-        # 🔹 REQUISITO: Relatório na linha de baixo ocupando 1/3
+        # 🔹 REQUISITO: Relatório na linha de baixo ocupando 1/3 e Procurar REPs ocupando 1/3
         bottom_boxes_layout = QHBoxLayout()
         bottom_boxes_layout.setSpacing(10)
         bottom_boxes_layout.addWidget(report_group, 1)
-        bottom_boxes_layout.addStretch(2) # Faz o report_group ocupar 1/3 e o resto ser espaço vazio
+        bottom_boxes_layout.addWidget(search_group, 1)
+        bottom_boxes_layout.addStretch(1) # Faz os dois ocuparem 2/3 e o resto ser espaço vazio
 
         # Layout Principal da aba
         layout.addLayout(top_boxes_layout)
@@ -784,6 +811,45 @@ class EvoRepAuthApp(QWidget):
             self.btn_gerar_relatorio.setEnabled(True)
             self.btn_gerar_relatorio.setText("Gerar Relatório")
             self.append_log(f"ABA TESTES (F5): Pasta para Relatório definida: {folder}")
+
+    def on_search_reps_clicked(self):
+        self.btn_search_reps.setEnabled(False)
+        self.btn_search_reps.setText("Buscando...")
+        self.rep_list_widget.clear()
+        
+        from workers import REPScannerWorker
+        self.rep_scanner = REPScannerWorker(port=int(self.main_port_input.text() or 3000))
+        self.rep_scanner.progress_signal.connect(self.on_rep_search_progress)
+        self.rep_scanner.found_signal.connect(self.on_rep_found)
+        self.rep_scanner.finished_signal.connect(self.on_rep_search_finished)
+        self.rep_scanner.start()
+
+    def on_rep_search_progress(self, percent):
+        self.btn_search_reps.setText(f"Buscando... {percent}%")
+
+    def on_rep_found(self, ip):
+        self.rep_list_widget.addItem(ip)
+
+    def on_rep_search_finished(self, found_reps):
+        self.btn_search_reps.setText("Buscar")
+        self.btn_search_reps.setEnabled(True)
+        if not found_reps:
+            self.append_log("ABA TESTES (F5): Nenhum REP encontrado na rede local.")
+
+    def on_connect_searched_rep(self):
+        selected_items = self.rep_list_widget.selectedItems()
+        if not selected_items:
+            return
+            
+        ip = selected_items[0].text()
+        
+        # Redireciona para aba F1 e preenche o IP
+        self.stacked_widget.setCurrentIndex(0)
+        self.main_ip_input.setText(ip)
+        self.on_command_selected(0)
+        
+        # Opcionalmente já clicar em conectar
+        # self.on_connect_clicked("main_")
 
     def update_loading_animations(self):
         self.symbol_idx = (self.symbol_idx + 1) % len(self.loading_symbols)

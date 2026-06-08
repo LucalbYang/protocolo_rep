@@ -101,7 +101,7 @@ registrar_comando(CommandDefinition(
                 {"label": "R - Retorna a quantidade de registros na memória.", "value": "R"},
                 {"label": "TP - Informa se o equipamento está bloqueado.", "value": "TP"},
                 {"label": "MRPE - Informa se há erro ao comunicar com a MRP.", "value": "MRPE"},
-                {"label": "SEMP - Indica se não há empregador cadastrado.", "value": "SEMP"},
+                {"label": "SEMP - Indica se há empregador cadastrado.", "value": "SEMP"},
                 {"label": "PP - Informa se o sensor de pouco papel está ativado.", "value": "PP"},
                 {"label": "SP - Informa se o equipamento está sem papel.", "value": "SP"},
                 {"label": "QP - Quantidade de tickets que podem ser impressos / tamanho atual / tamanho total da bobina.", "value": "QP"},

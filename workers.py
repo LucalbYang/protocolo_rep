@@ -433,6 +433,136 @@ class IPDiscoveryWorker(QThread):
         ips = list_all_local_ips()
         self.finished_signal.emit(ips)
 
+import ipaddress
+import concurrent.futures
+
+class REPScannerWorker(QThread):
+    """Worker para escanear a rede local em busca de REPs na porta especificada (default 3000)."""
+    progress_signal = pyqtSignal(int)
+    found_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal(list)
+
+    def __init__(self, port=3000, parent=None):
+        super().__init__(parent)
+        self.port = port
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def check_ip(self, ip):
+        if not self.running:
+            return None
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5) # Tempo curto para o connect
+            result = sock.connect_ex((ip, self.port))
+            if result == 0:
+                # Conectou! Envia pacote 01+RB para validar se é o equipamento
+                rb_packet = EvoRepProtocol.pack("01+RB")
+                sock.sendall(rb_packet)
+                
+                # Aguarda resposta
+                resp_data = EvoRepProtocol.receive_full(sock, timeout=0.8)
+                if resp_data:
+                    payload = EvoRepProtocol.unpack(resp_data).decode('utf-8', errors='ignore')
+                    # Valida se a resposta pertence ao protocolo (ex: 01+RB... ou erros 00+00+...)
+                    if payload.startswith("01+") or payload.startswith("00+00+"):
+                        return ip
+        except:
+            pass
+        finally:
+            # Fechamento não intrusivo e imediato para liberar o equipamento
+            if sock:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
+                try:
+                    sock.close()
+                except:
+                    pass
+        return None
+
+    def run(self):
+        from utils import list_all_local_ips
+        import subprocess
+        import re
+
+        subnets = set()
+        
+        # 1. Adiciona as sub-redes explícitas solicitadas
+        try:
+            subnets.add(ipaddress.IPv4Network("192.168.0.0/16", strict=False))
+        except:
+            pass
+
+        # 2. Adiciona a sub-rede /24 de todos os IPs locais como fallback base
+        local_ips = list_all_local_ips()
+        for local_ip in local_ips:
+            if local_ip.startswith("127.") or local_ip.startswith("169.254."):
+                continue
+            try:
+                # Usa /24 como padrão inicial para as interfaces conhecidas
+                net = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
+                subnets.add(net)
+            except:
+                pass
+                
+        # 2. Inspeciona a tabela ARP do sistema para descobrir outras sub-redes ativas
+        # O Windows ARP table lista dispositivos conhecidos, o que ajuda a encontrar sub-redes ex: /16 onde há IPs espalhados
+        try:
+            arp_output = subprocess.check_output('arp -a', shell=True).decode('cp850', errors='ignore')
+            # Busca todos os IPs IPv4 válidos na saída
+            arp_ips = re.findall(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', arp_output)
+            
+            for ip_str in arp_ips:
+                if ip_str.startswith("127.") or ip_str.startswith("224.") or ip_str.startswith("239.") or ip_str.startswith("255."):
+                    continue
+                try:
+                    # Agrupa os IPs da tabela ARP em blocos /24 para varredura
+                    net = ipaddress.IPv4Network(f"{ip_str}/24", strict=False)
+                    subnets.add(net)
+                except:
+                    pass
+        except Exception as e:
+            pass
+                
+        all_ips_to_check = []
+        seen_ips = set()
+        for net in subnets:
+            for ip in net.hosts():
+                ip_str = str(ip)
+                if ip_str not in seen_ips:
+                    seen_ips.add(ip_str)
+                    all_ips_to_check.append(ip_str)
+                    
+        total = len(all_ips_to_check)
+        if total == 0:
+            self.finished_signal.emit([])
+            return
+            
+        found_reps = []
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1000) as executor:
+            future_to_ip = {executor.submit(self.check_ip, ip): ip for ip in all_ips_to_check}
+            count = 0
+            for future in concurrent.futures.as_completed(future_to_ip):
+                if not self.running:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                
+                count += 1
+                self.progress_signal.emit(int((count / total) * 100))
+                
+                result = future.result()
+                if result:
+                    found_reps.append(result)
+                    self.found_signal.emit(result)
+                    
+        self.finished_signal.emit(found_reps)
+
 class ListenerWorker(QThread):
     received_signal       = pyqtSignal(str)
     received_bytes_signal = pyqtSignal(str)
