@@ -814,18 +814,32 @@ class ReportWorker(QThread):
         import os
         from datetime import datetime
         import openpyxl
-        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
         now = datetime.now()
         timestamp_str = now.strftime("%Y%m%d_%H%M%S")
         
         num_rep = ""
+        modelo = "Desconhecido"
+        id_software = "Desconhecido"
+        versao_mem = "Desconhecido"
+
         for label, cmd_str, resp_str, _ in entries:
             if label == "RC/NR_REP":
                 parts = resp_str.split("+")
-                if len(parts) >= 4 and parts[2] == "00":
+                if len(parts) >= 4 and parts[2] == "000":
+                    if "[" in parts[3]:
+                        num_rep = parts[3].split("[")[1].split("]")[0].strip()
+                    elif "]" in parts[3]:
+                        num_rep = parts[3].split("]")[0].strip()
+                elif len(parts) >= 4 and parts[2] == "00":
                     num_rep = parts[3].split("]")[0].strip()
-                break
+            elif label == "RC/MODELO" and "[" in resp_str:
+                modelo = resp_str.split("[")[1].split("]")[0]
+            elif label == "RC/ID_SOFTWARE" and "[" in resp_str:
+                id_software = resp_str.split("[")[1].split("]")[0]
+            elif label == "RC/VERSAO_MEM" and "[" in resp_str:
+                versao_mem = resp_str.split("[")[1].split("]")[0]
 
         if not num_rep:
             num_rep = f"_{ip.replace('.', '_')}_{timestamp_str}"
@@ -836,19 +850,64 @@ class ReportWorker(QThread):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Relatório de Testes"
-
-        # Headers
-        headers = ["N°", "Comando enviado", "String enviada", "String recebida", "Duração", "Status"]
-        ws.append(headers)
-
-        header_font = Font(bold=True)
-        for col_num in range(1, len(headers) + 1):
-            ws.cell(row=1, column=col_num).font = header_font
+        ws.sheet_view.showGridLines = False
 
         # Colors & Styles
+        dark_green_fill = PatternFill(start_color="38761D", end_color="38761D", fill_type="solid")
         green_fill = PatternFill(start_color="92D050", end_color="92D050", fill_type="solid")
         red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
         wrap_alignment = Alignment(wrap_text=True, vertical='center')
+        thin_border = Border(
+            left=Side(style='thin'), 
+            right=Side(style='thin'), 
+            top=Side(style='thin'), 
+            bottom=Side(style='thin')
+        )
+
+        # Add Header Info
+        try:
+            from openpyxl.cell.rich_text import CellRichText, TextBlock
+            from openpyxl.cell.text import InlineFont
+            bold_font = InlineFont(b=True, color="000000", sz=15)
+            normal_font = InlineFont(b=False, color="000000", sz=15)
+            header_text = CellRichText(
+                TextBlock(bold_font, "Data de Geração: "),
+                TextBlock(normal_font, f"{now.strftime('%d/%m/%Y %H:%M:%S')} | "),
+                TextBlock(bold_font, "Modelo: "),
+                TextBlock(normal_font, f"{modelo} | "),
+                TextBlock(bold_font, "ID Software: "),
+                TextBlock(normal_font, f"{id_software} | "),
+                TextBlock(bold_font, "Versão Memória: "),
+                TextBlock(normal_font, f"{versao_mem}")
+            )
+        except ImportError:
+            header_text = f"Data de Geração: {now.strftime('%d/%m/%Y %H:%M:%S')} | Modelo: {modelo} | ID Software: {id_software} | Versão Memória: {versao_mem}"
+
+        current_row = 1
+        c1 = ws.cell(row=current_row, column=1, value=header_text)
+        if isinstance(header_text, str):
+            c1.font = Font(bold=False, color="000000", size=15)
+        c1.fill = green_fill
+        c1.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        c1.border = thin_border
+        
+        # Colorir também as células mescladas para o fundo verde ficar na extensão toda
+        for col_idx in range(2, 7):
+            cell = ws.cell(row=current_row, column=col_idx)
+            cell.fill = green_fill
+            cell.border = thin_border
+
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+        ws.row_dimensions[current_row].height = 25
+        current_row += 1
+
+        # Headers da tabela
+        headers = ["N°", "Comando enviado", "String enviada", "String recebida", "Duração", "Status"]
+        header_font = Font(bold=True)
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=current_row, column=col_num, value=header)
+            cell.font = header_font
+            cell.border = thin_border
 
         for i, (label, cmd_str, resp_str, duration) in enumerate(entries, 1):
             idx_bracket = resp_str.find("]")
@@ -859,30 +918,40 @@ class ReportWorker(QThread):
 
             status = "OK" if is_ok else "NOK"
             
-            row_num = i + 1
-            ws.append([i, label, cmd_str, resp_str, f"{duration:.3f}s", status])
+            row_num = current_row + i
+            ws.cell(row=row_num, column=1, value=i)
+            ws.cell(row=row_num, column=2, value=label)
+            ws.cell(row=row_num, column=3, value=cmd_str)
+            ws.cell(row=row_num, column=4, value=resp_str)
+            ws.cell(row=row_num, column=5, value=f"{duration:.3f}s")
+            status_cell = ws.cell(row=row_num, column=6, value=status)
             
             # Formatação de texto e quebra de linha
             for col_num in range(1, 7):
-                ws.cell(row=row_num, column=col_num).alignment = wrap_alignment
+                cell = ws.cell(row=row_num, column=col_num)
+                cell.alignment = wrap_alignment
+                cell.border = thin_border
 
             # Formatação de cor no status
-            status_cell = ws.cell(row=row_num, column=6)
             if is_ok:
                 status_cell.fill = green_fill
             else:
                 status_cell.fill = red_fill
 
         # Auto adjust column widths roughly for columns A, B, E, F
-        for col in ws.columns:
-            column = col[0].column_letter
+        from openpyxl.utils import get_column_letter
+        for col_idx in range(1, 7):
+            column = get_column_letter(col_idx)
             if column in ['C', 'D']:
                 continue  # Skip C and D for auto-adjust
 
             max_length = 0
-            for cell in col:
+            for row_idx in range(1, ws.max_row + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                if type(cell).__name__ == 'MergedCell':
+                    continue
                 try:
-                    if len(str(cell.value)) > max_length:
+                    if cell.value and len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
                 except:
                     pass
@@ -890,6 +959,7 @@ class ReportWorker(QThread):
             ws.column_dimensions[column].width = min(adjusted_width, 100)
 
         # Fixed widths for specific columns to force wrapping
+        ws.column_dimensions['A'].width = 5   # N°
         ws.column_dimensions['C'].width = 50  # string enviada
         ws.column_dimensions['D'].width = 65  # string recebida
 
