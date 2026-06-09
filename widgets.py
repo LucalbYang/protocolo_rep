@@ -2,6 +2,7 @@
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QComboBox)
+from PyQt6.QtGui import QPixmap
 from constants import APP_VERSION
 
 class NoScrollComboBox(QComboBox):
@@ -84,6 +85,11 @@ class HeaderBar(QWidget):
         outer.setSpacing(0)
 
         # ─── Brand (título + versão) ───────────────────────────────
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("logo-evo.png")
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(logo_pixmap.scaledToHeight(28, Qt.TransformationMode.SmoothTransformation))
+
         title = QLabel("REPLink")
         title.setObjectName("header_title")
 
@@ -93,6 +99,7 @@ class HeaderBar(QWidget):
         brand_row = QHBoxLayout()
         brand_row.setSpacing(5)
         brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignVCenter)
         brand_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         brand_row.addWidget(self._version_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
