@@ -589,7 +589,7 @@ class ListenerWorker(QThread):
                 if self.session_key:
                     payload = EvoRepCrypto.decrypt_aes(self.session_key, payload_raw)
                 else:
-                    payload = payload_raw.decode('utf-8', errors='ignore')
+                    payload = payload_raw.decode('iso-8859-1')
 
                 self.received_signal.emit(payload)
                 self.received_bytes_signal.emit(data.hex(' '))

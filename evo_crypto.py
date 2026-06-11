@@ -81,10 +81,10 @@ class EvoRepCrypto:
     @staticmethod
     def decrypt_aes(key: bytes, ciphertext: bytes) -> str:
         if not key:
-            return ciphertext.decode('utf-8', errors='ignore')
+            return ciphertext.decode('iso-8859-1')
 
         if len(ciphertext) < 16 or len(ciphertext) % 16 != 0:
-            return ciphertext.decode('utf-8', errors='ignore')
+            return ciphertext.decode('iso-8859-1')
 
         iv = ciphertext[:16]
         actual_ciphertext = ciphertext[16:]
@@ -92,12 +92,12 @@ class EvoRepCrypto:
         if CRYPTO_BACKEND == "pycryptodome":
             cipher = AES.new(key, AES.MODE_CBC, iv)
             decrypted = cipher.decrypt(actual_ciphertext)
-            return decrypted.rstrip(b'\x00').decode('utf-8', errors='replace')
+            return decrypted.rstrip(b'\x00').decode('iso-8859-1')
         else:
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
             decryptor = cipher.decryptor()
             decrypted = decryptor.update(actual_ciphertext) + decryptor.finalize()
-            return decrypted.rstrip(b'\x00').decode('utf-8', errors='replace')
+            return decrypted.rstrip(b'\x00').decode('iso-8859-1')
 
     @staticmethod
     def encrypt_credentials_with_rsa(pubkey_data, credentials: str) -> bytes:

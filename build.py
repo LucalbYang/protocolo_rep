@@ -23,6 +23,10 @@ def build():
         icon_param = ["--icon", logo_file]
         data_param = ["--add-data", f"{logo_file};."]
 
+    # Adiciona a logo-evo se existir
+    if os.path.exists("logo-evo.png"):
+        data_param.extend(["--add-data", "logo-evo.png;."])
+
     # Comando do PyInstaller
     command = [
         "pyinstaller",

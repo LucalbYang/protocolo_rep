@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QComboBox)
 from PyQt6.QtGui import QPixmap
 from constants import APP_VERSION
+from utils import resource_path
 
 class NoScrollComboBox(QComboBox):
     """QComboBox que ignora scroll do mouse e teclas de seta para evitar mudanças acidentais."""
@@ -86,7 +87,7 @@ class HeaderBar(QWidget):
 
         # ─── Brand (título + versão) ───────────────────────────────
         logo_label = QLabel()
-        logo_pixmap = QPixmap("logo-evo.png")
+        logo_pixmap = QPixmap(resource_path("logo-evo.png"))
         if not logo_pixmap.isNull():
             logo_label.setPixmap(logo_pixmap.scaledToHeight(28, Qt.TransformationMode.SmoothTransformation))
 

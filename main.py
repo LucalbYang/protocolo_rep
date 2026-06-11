@@ -1068,7 +1068,7 @@ class EvoRepAuthApp(QWidget):
                     filename = f"AFD{self.afd_rep_num}L.txt"
                     filepath = os.path.join(self.afd_save_path, filename)
                     self.afd_last_filepath = filepath
-                    self.afd_current_file = open(filepath, "w", encoding="utf-8", newline='\n')
+                    self.afd_current_file = open(filepath, "w", encoding="iso-8859-1", newline='\n')
                     self.afd_current_file.write(" " * 302 + "\n")
                     
                     self.afd_state = "EMPLOYER"
