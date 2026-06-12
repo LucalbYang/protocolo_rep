@@ -1,6 +1,6 @@
 # constants.py
 
-APP_VERSION = "0.8.9"
+APP_VERSION = "0.9.0"
 
 # ══════════════════════════════════════════════════════════════════════
 #  CATEGORIAS DE CONFIGURAÇÃO (EC)

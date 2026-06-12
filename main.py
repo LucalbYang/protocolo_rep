@@ -144,6 +144,10 @@ class EvoRepAuthApp(QWidget):
         self.loading_symbols = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         self.symbol_idx = 0
 
+        self.queue_mode = False
+        self.main_command_queue = []
+        self.is_sending_queue = False
+
         self._setup_ui()
         self.load_config()
         self.update_client_ip_list() # Primeira carga ao abrir
@@ -445,6 +449,26 @@ class EvoRepAuthApp(QWidget):
             send_button.setEnabled(False)
             cmds_group_layout.addWidget(send_button)
 
+            if prefix == "main_":
+                self.main_queue_buttons_widget = QWidget()
+                queue_layout = QHBoxLayout(self.main_queue_buttons_widget)
+                queue_layout.setContentsMargins(0, 0, 0, 0)
+                queue_layout.setSpacing(10)
+                
+                self.main_btn_add_to_queue = QPushButton("Adicionar comando na fila")
+                self.main_btn_add_to_queue.setObjectName("primary_btn")
+                self.main_btn_add_to_queue.setEnabled(False)
+                
+                self.main_btn_send_queue = QPushButton("Enviar fila")
+                self.main_btn_send_queue.setObjectName("primary_btn")
+                self.main_btn_send_queue.setEnabled(False)
+                
+                queue_layout.addWidget(self.main_btn_add_to_queue)
+                queue_layout.addWidget(self.main_btn_send_queue)
+                self.main_queue_buttons_widget.setVisible(False)
+                
+                cmds_group_layout.addWidget(self.main_queue_buttons_widget)
+
         top_layout.addWidget(conn_group, 1)
         top_layout.addWidget(cmds_group, 3)
         layout.addLayout(top_layout)
@@ -481,6 +505,12 @@ class EvoRepAuthApp(QWidget):
 
         toggle_mode_button = QPushButton("Exibir em bytes")
         control_layout.addWidget(toggle_mode_button)
+
+        if prefix == "main_":
+            self.main_btn_show_queue = QPushButton("Mostrar Fila")
+            self.main_btn_show_queue.setVisible(False)
+            control_layout.addWidget(self.main_btn_show_queue)
+
         layout.addLayout(control_layout)
 
         # ── Armazenar referências ─────────────────────────────────
@@ -514,6 +544,11 @@ class EvoRepAuthApp(QWidget):
         send_button.clicked.connect(self.on_send_command_clicked)
         clear_button.clicked.connect(self.on_clear_clicked)
         toggle_mode_button.clicked.connect(self.on_toggle_display_mode)
+
+        if prefix == "main_":
+            self.main_btn_add_to_queue.clicked.connect(self.on_send_command_clicked)
+            self.main_btn_send_queue.clicked.connect(self.on_send_queue_clicked)
+            self.main_btn_show_queue.clicked.connect(self.on_show_queue_clicked)
 
         if is_f3:
             self.f3_unlock_button.clicked.connect(self.on_f3_unlock_clicked)
@@ -1327,7 +1362,7 @@ class EvoRepAuthApp(QWidget):
         state = self.tab_data[prefix]
         if not state["persistent_sock"]: return
 
-        getattr(self, f"{prefix}send_button").setEnabled(False)
+        self.set_send_button_state(prefix, False)
         self.command_worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
         self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
         self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
@@ -2138,8 +2173,14 @@ class EvoRepAuthApp(QWidget):
                     self.append_log(f"Comando abortado: {e}")
                     return
 
-        send_button = self._get_widget("send_button")
-        send_button.setEnabled(False)
+        # ── INTERCEPT FOR QUEUE MODE ──
+        if prefix == "main_" and getattr(self, "queue_mode", False) and self.sender() == getattr(self, "main_btn_add_to_queue", None):
+            self.main_command_queue.append(command_str)
+            self.append_log(f"Comando adicionado à fila: {command_str}")
+            self.set_send_button_state("main_", True)
+            return
+
+        self.set_send_button_state(prefix, False)
         self.command_worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
         self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
         self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
@@ -2164,6 +2205,9 @@ class EvoRepAuthApp(QWidget):
             self.on_command_selected(0)
         elif event.key() == Qt.Key.Key_F5:
             self.stacked_widget.setCurrentIndex(4)
+        elif event.key() == Qt.Key.Key_F12:
+            if self.stacked_widget.currentIndex() == 0:
+                self.toggle_queue_mode()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.on_enter_pressed()
         else:
@@ -2223,6 +2267,133 @@ class EvoRepAuthApp(QWidget):
         if prefix != "f3_":
             getattr(self, f"{prefix}user_input").setEnabled(enabled)
             getattr(self, f"{prefix}password_input").setEnabled(enabled)
+
+    def set_send_button_state(self, prefix, enabled):
+        getattr(self, f"{prefix}send_button").setEnabled(enabled)
+        if prefix == "main_" and hasattr(self, "main_btn_add_to_queue"):
+            self.main_btn_add_to_queue.setEnabled(enabled and not getattr(self, "is_sending_queue", False))
+            self.main_btn_send_queue.setEnabled(enabled and not getattr(self, "is_sending_queue", False) and len(getattr(self, "main_command_queue", [])) > 0)
+
+    def toggle_queue_mode(self):
+        self.queue_mode = not getattr(self, "queue_mode", False)
+        
+        self.main_send_button.setVisible(not self.queue_mode)
+        self.main_queue_buttons_widget.setVisible(self.queue_mode)
+        self.main_btn_show_queue.setVisible(self.queue_mode)
+        
+        if self.queue_mode:
+            self.append_log("Modo de envio em fila ativado (Aba Servidor).")
+        else:
+            self.append_log("Modo de envio em fila desativado (Aba Servidor).")
+
+    def on_show_queue_clicked(self):
+        from PyQt6.QtWidgets import QFileDialog
+
+        queue_text = "\n".join(f"{i+1}. {cmd}" for i, cmd in enumerate(getattr(self, "main_command_queue", [])))
+        if not queue_text:
+            queue_text = "Nenhum comando."
+            
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Fila de Comandos")
+        msg_box.setText(f"A fila atual contém:\n\n{queue_text}")
+        
+        load_btn = msg_box.addButton("Carregar", QMessageBox.ButtonRole.ActionRole)
+        save_btn = msg_box.addButton("Salvar", QMessageBox.ButtonRole.ActionRole)
+        clear_btn = msg_box.addButton("Limpar", QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton("Fechar", QMessageBox.ButtonRole.RejectRole)
+        
+        msg_box.exec()
+        
+        clicked_btn = msg_box.clickedButton()
+        if clicked_btn == clear_btn:
+            self.main_command_queue.clear()
+            self.append_log("A fila de comandos foi limpa.")
+            if hasattr(self, "main_btn_send_queue"):
+                self.main_btn_send_queue.setEnabled(False)
+        elif clicked_btn == save_btn:
+            if not getattr(self, "main_command_queue", []):
+                QMessageBox.warning(self, "Aviso", "Não há comandos na fila para salvar.")
+                return
+            
+            file_path, _ = QFileDialog.getSaveFileName(self, "Salvar Fila", "", "Text Files (*.txt);;All Files (*)")
+            if file_path:
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        for cmd in self.main_command_queue:
+                            f.write(f"{cmd}\n")
+                    self.append_log(f"Fila salva em: {file_path}")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro", f"Erro ao salvar fila: {e}")
+        elif clicked_btn == load_btn:
+            file_path, _ = QFileDialog.getOpenFileName(self, "Carregar Fila", "", "Text Files (*.txt);;All Files (*)")
+            if file_path:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        lines = [line.strip() for line in f if line.strip()]
+                    if lines:
+                        if not hasattr(self, "main_command_queue"):
+                            self.main_command_queue = []
+                        self.main_command_queue.extend(lines)
+                        self.append_log(f"{len(lines)} comandos carregados na fila.")
+                        self.set_send_button_state("main_", self.tab_data["main_"]["connected"])
+                    else:
+                        QMessageBox.information(self, "Aviso", "O arquivo selecionado está vazio.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro", f"Erro ao carregar fila: {e}")
+
+    def on_send_queue_clicked(self):
+        if not getattr(self, "main_command_queue", []):
+            self.append_log("A fila está vazia.")
+            return
+            
+        self.is_sending_queue = True
+        self.set_send_button_state("main_", False)
+        self._send_next_in_queue()
+
+    def _send_next_in_queue(self):
+        if not getattr(self, "main_command_queue", []) or not getattr(self, "is_sending_queue", False):
+            self.is_sending_queue = False
+            self.set_send_button_state("main_", True)
+            self.append_log("Envio da fila concluído.")
+            return
+            
+        command_str = self.main_command_queue.pop(0)
+        prefix = "main_"
+        state = self.tab_data[prefix]
+        
+        if not state["persistent_sock"]:
+            self.append_log("Erro: Socket não disponível para enviar fila.")
+            self.is_sending_queue = False
+            self.set_send_button_state("main_", True)
+            return
+
+        self.waiting_for_queue_response = True
+        
+        if hasattr(self, "queue_timeout_timer"):
+            self.queue_timeout_timer.stop()
+        else:
+            self.queue_timeout_timer = QTimer(self)
+            self.queue_timeout_timer.setSingleShot(True)
+            self.queue_timeout_timer.timeout.connect(self.on_queue_timeout)
+        self.queue_timeout_timer.start(10000) # 10s timeout per command
+
+        self.command_worker = CommandWorker(state["persistent_sock"], command_str, state["session_key"])
+        self.command_worker.sent_signal.connect(lambda txt: self.append_sent(txt, prefix))
+        self.command_worker.sent_bytes_signal.connect(lambda hex_txt: self.append_sent_bytes(hex_txt, prefix))
+        
+        def on_finished(success, message):
+            self.on_send_command_finished(success, message)
+            # Não chamamos _send_next_in_queue aqui, aguardamos a resposta no append_received
+                
+        self.command_worker.finished_signal.connect(on_finished)
+        self.command_worker.start()
+
+    def on_queue_timeout(self):
+        if getattr(self, "waiting_for_queue_response", False):
+            self.waiting_for_queue_response = False
+            self.is_sending_queue = False
+            self.set_send_button_state("main_", True)
+            self.append_log("Timeout: O equipamento não respondeu ao comando da fila a tempo. Envio abortado.")
 
     # ──────────────────────────────────────────────────────────────────
     #  CONFIGURAÇÕES  (inalteradas)
@@ -2388,6 +2559,14 @@ class EvoRepAuthApp(QWidget):
             state["last_received_text"] = "..." + state["last_received_text"][-20000:]
 
         self.update_sent_received_output(prefix)
+        
+        # ── QUEUE MODE: SEND NEXT COMMAND ──
+        if prefix == "main_" and getattr(self, "waiting_for_queue_response", False):
+            self.waiting_for_queue_response = False
+            if hasattr(self, "queue_timeout_timer"):
+                self.queue_timeout_timer.stop()
+            if getattr(self, "is_sending_queue", False):
+                QTimer.singleShot(100, self._send_next_in_queue)
 
         # 🔹 DETECÇÃO GLOBAL DE BLOQUEIO (Erro 047)
         # Se aparecer 047 em qualquer resposta (ex: 01+RA+047, 01+EU+047), bloqueia e desconecta.
@@ -2508,7 +2687,7 @@ class EvoRepAuthApp(QWidget):
         prefix = self._get_active_prefix()
         if prefix == "test_":
             prefix = "main_"
-        getattr(self, f"{prefix}send_button").setEnabled(True)
+        self.set_send_button_state(prefix, True)
 
     def on_clear_clicked(self):
         prefix = self._get_active_prefix()
@@ -2743,6 +2922,10 @@ class EvoRepAuthApp(QWidget):
         state["connected"]   = False
 
         if prefix == "main_":
+            self.waiting_for_queue_response = False
+            self.is_sending_queue = False
+            if hasattr(self, "queue_timeout_timer"):
+                self.queue_timeout_timer.stop()
             self.connect_timer.stop()
             self.main_cancel_button.setVisible(False)
             self.main_connect_button.setText("Conectar")
@@ -2806,7 +2989,7 @@ class EvoRepAuthApp(QWidget):
                 self.f3_connect_button.setEnabled(True)
                 self.f3_unlock_button.setEnabled(True)
 
-            getattr(self, f"{prefix}send_button").setEnabled(True)
+            self.set_send_button_state(prefix, True)
             self.set_inputs_enabled(False, prefix)
 
             # 🔹 REQUISITO: Exibir botão Macro se for F1 ou F2
@@ -2863,7 +3046,7 @@ class EvoRepAuthApp(QWidget):
                 self.f3_rep_num_field.clear()
                 self.f3_unlock_code_field.clear()
 
-            getattr(self, f"{prefix}send_button").setEnabled(False)
+            self.set_send_button_state(prefix, False)
             self.set_inputs_enabled(True, prefix)
 
             if "Erro 047" in message:
